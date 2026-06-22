@@ -1,4 +1,4 @@
-const CACHE_NAME = 'waterman-butterfly-cache-v2'; // غيرت الإصدار لتحديث الكاش
+const CACHE_NAME = 'waterman-butterfly-cache-v3'; // غيرت الإصدار لتحديث الكاش
 
 // قائمة الملفات والمكتبات الخارجية
 const ASSETS_TO_CACHE = [
