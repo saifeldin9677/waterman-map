@@ -1,0 +1,10 @@
+{
+  "name": "خريطة Waterman Butterfly",
+  "short_name": "الخريطة",
+  "description": "خريطة Waterman Butterfly متعددة الطبقات تعمل دون اتصال",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1a1d23",
+  "theme_color": "#1a1d23",
+  "orientation": "any"
+}
