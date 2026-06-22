@@ -148,7 +148,26 @@
     <span style="font-size:0.7em;color:var(--text-secondary);">إسقاط ووترمان الفراشي</span>
 </div>
 
-<div class="controls-bar" id="controlsBar">
+
+
+<div class="map-container" id="mapContainer">
+    <svg id="mapSvg"></svg>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="legend" id="legend"></div>
+    <div class="info-overlay" id="infoOverlay"></div>
+    <div class="coordinates-display" id="coordinatesDisplay">خط الطول: — | خط العرض: —</div>
+    <div class="country-panel" id="countryPanel">
+        <button class="export-btn" id="exportBtn" title="تحميل">💾</button>
+        <button class="close-btn" id="closePanelBtn">✖</button>
+        <div id="panelContent"></div>
+    </div>
+    <button class="menu-toggle" id="menuToggle" title="فتح القائمة">☰</button>
+    <div class="zoom-controls">
+        <button class="zoom-btn" id="zoomInBtn" title="تكبير">+</button>
+        <button class="zoom-btn" id="zoomOutBtn" title="تصغير">−</button>
+        <button class="zoom-btn" id="zoomResetBtn" title="إعادة">⌂</button>
+    </div>
+    <div class="controls-bar" id="controlsBar">
     <span class="control-label" id="langLabel">🌐 اللغة:</span>
     <button class="btn" id="langToggle">العربية</button>
     <span class="divider"></span>
@@ -186,24 +205,6 @@
     </div>
     <button class="btn" id="resetBtn">↺ إعادة</button>
 </div>
-
-<div class="map-container" id="mapContainer">
-    <svg id="mapSvg"></svg>
-    <div class="tooltip" id="tooltip"></div>
-    <div class="legend" id="legend"></div>
-    <div class="info-overlay" id="infoOverlay"></div>
-    <div class="coordinates-display" id="coordinatesDisplay">خط الطول: — | خط العرض: —</div>
-    <div class="country-panel" id="countryPanel">
-        <button class="export-btn" id="exportBtn" title="تحميل">💾</button>
-        <button class="close-btn" id="closePanelBtn">✖</button>
-        <div id="panelContent"></div>
-    </div>
-    <button class="menu-toggle" id="menuToggle" title="فتح القائمة">☰</button>
-    <div class="zoom-controls">
-        <button class="zoom-btn" id="zoomInBtn" title="تكبير">+</button>
-        <button class="zoom-btn" id="zoomOutBtn" title="تصغير">−</button>
-        <button class="zoom-btn" id="zoomResetBtn" title="إعادة">⌂</button>
-    </div>
     <div class="copy-notification" id="copyNotification"></div>
 </div>
 
