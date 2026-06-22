@@ -69,73 +69,98 @@
             .country-panel{top:20px;max-width:200px;padding:8px 10px;}
             .tooltip{font-size:0.6em;max-width:160px;padding:4px 8px;}
         }
-   /* زر القائمة المثلث (الهامبرغر) */
-.menu-toggle {
-    position: fixed;
-    bottom: 90px;
-    left: 16px;
-    width: 50px;
-    height: 50px;
-    border-radius: 50%;
-    background: var(--panel-bg);
-    border: 2px solid var(--border);
-    color: var(--text);
-    font-size: 1.8em;
-    font-weight: bold;
-    cursor: pointer;
-    z-index: 999;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: 0.2s;
-}
-.menu-toggle:hover {
-    background: var(--btn-hover);
-    transform: scale(1.05);
-}
-.menu-toggle.active {
-    background: var(--btn-active);
-    border-color: #fff;
-}
 
-/* شريط الأدوات (القائمة السفلية المنبثقة) */
-.controls-bar {
-    position: fixed;
-    bottom: 160px;
-    left: 10px;
-    right: 10px;
-    background: rgba(20, 24, 32, 0.96);
-    backdrop-filter: blur(12px);
-    border-radius: 20px;
-    padding: 16px 12px;
-    z-index: 998;
-    display: none;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    max-height: 60vh;
-    overflow-y: auto;
-    border: 1px solid rgba(255,255,255,0.15);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.7);
-}
-.controls-bar.active {
-    display: flex;
-}
-.controls-bar .btn {
-    padding: 8px 14px;
-    font-size: 0.85em;
-    border-radius: 30px;
-    min-height: 40px;
-}
-.controls-bar .control-label,
-.controls-bar .divider {
-    display: none;
-}
-.controls-bar .control-group {
-    gap: 6px;
-}
+        /* زر القائمة (☰) - في الجهة اليمنى فوق أزرار التكبير */
+        .menu-toggle {
+            position: fixed;
+            bottom: 90px;
+            right: 80px;
+            left: auto;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: var(--panel-bg);
+            border: 2px solid var(--border);
+            color: var(--text);
+            font-size: 1.8em;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 999;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+        }
+        .menu-toggle:hover {
+            background: var(--btn-hover);
+            transform: scale(1.05);
+        }
+        .menu-toggle.active {
+            background: var(--btn-active);
+            border-color: #fff;
+        }
+
+        /* القائمة السفلية المنبثقة (Bottom Sheet) - ضيقة ومتمركزة */
+        .controls-bar {
+            position: fixed;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: fit-content;
+            max-width: 92vw;
+            background: rgba(20, 24, 32, 0.96);
+            backdrop-filter: blur(12px);
+            border-radius: 24px;
+            padding: 12px 16px;
+            z-index: 998;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.12);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        .controls-bar.active {
+            display: flex;
+        }
+        /* كل صف */
+        .controls-bar .row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            justify-content: center;
+        }
+        /* عنوان الصف */
+        .controls-bar .row-label {
+            font-size: 0.6em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-left: 4px;
+            white-space: nowrap;
+        }
+        /* أزرار القائمة أصغر قليلاً وأنيقة */
+        .controls-bar .btn {
+            padding: 6px 10px;
+            font-size: 0.7em;
+            border-radius: 20px;
+            min-height: 32px;
+        }
+        .controls-bar .control-group {
+            gap: 4px;
+        }
+        .controls-bar .search-box input {
+            width: 100px;
+            padding: 4px 10px;
+            font-size: 0.7em;
+        }
+        /* إخفاء الزوائد */
+        .controls-bar .control-label,
+        .controls-bar .divider {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -146,8 +171,6 @@
     </div>
     <span style="font-size:0.7em;color:var(--text-secondary);">إسقاط ووترمان الفراشي</span>
 </div>
-
-
 
 <div class="map-container" id="mapContainer">
     <svg id="mapSvg"></svg>
@@ -160,50 +183,66 @@
         <button class="close-btn" id="closePanelBtn">✖</button>
         <div id="panelContent"></div>
     </div>
-    <button class="menu-toggle" id="menuToggle" title="فتح القائمة">☰</button>
+
     <div class="zoom-controls">
         <button class="zoom-btn" id="zoomInBtn" title="تكبير">+</button>
         <button class="zoom-btn" id="zoomOutBtn" title="تصغير">−</button>
         <button class="zoom-btn" id="zoomResetBtn" title="إعادة">⌂</button>
     </div>
+    <button class="menu-toggle" id="menuToggle" title="فتح القائمة">☰</button>
+
+    <!-- القائمة السفلية (Bottom Sheet) مع الصفوف المنظمة -->
     <div class="controls-bar" id="controlsBar">
-    <span class="control-label" id="langLabel">🌐 اللغة:</span>
-    <button class="btn" id="langToggle">العربية</button>
-    <span class="divider"></span>
-    <span class="control-label" id="modeLabel">🎨 الوضع:</span>
-    <div class="control-group" id="modeButtons">
-        <button class="btn mode-btn active" data-mode="religion">🕌 دين</button>
-        <button class="btn mode-btn" data-mode="terrain">🏔️ تضاريس</button>
-        <button class="btn mode-btn" data-mode="density">👥 كثافة</button>
-        <button class="btn mode-btn" data-mode="precipitation">🌧️ أمطار</button>
-        <button class="btn mode-btn" data-mode="temperature">🌡️ حرارة</button>
-        <button class="btn mode-btn" data-mode="normal">🌍 طبيعي</button>
+        <!-- الصف الأول: اللغة والبحث + النسخ والإعادة -->
+        <div class="row">
+            <span class="row-label" id="rowLangLabel">🌐 اللغة:</span>
+            <button class="btn" id="langToggle">English</button>
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="بحث..." autocomplete="off">
+                <ul class="suggestions-list" id="suggestionsList"></ul>
+            </div>
+            <button class="btn" id="copyLinkBtn" title="نسخ الرابط">📋</button>
+            <button class="btn" id="resetBtn">↺ إعادة</button>
+        </div>
+
+        <!-- الصف الثاني: الوضع (Mode) -->
+        <div class="row">
+            <span class="row-label" id="rowModeLabel">🎨 الوضع:</span>
+            <div class="control-group" id="modeButtons">
+                <button class="btn mode-btn active" data-mode="religion">🕌 دين</button>
+                <button class="btn mode-btn" data-mode="terrain">🏔️ تضاريس</button>
+                <button class="btn mode-btn" data-mode="density">👥 كثافة</button>
+                <button class="btn mode-btn" data-mode="precipitation">🌧️ أمطار</button>
+                <button class="btn mode-btn" data-mode="temperature">🌡️ حرارة</button>
+                <button class="btn mode-btn" data-mode="normal">🌍 طبيعي</button>
+            </div>
+        </div>
+
+        <!-- الصف الثالث: التقسيم (Division/Filter) - شعار محايد 🎯 -->
+        <div class="row">
+            <span class="row-label" id="rowFilterLabel">🎯 التقسيم:</span>
+            <div class="control-group" id="religionButtons">
+                <button class="btn religion-btn active" data-religion="all">الكل</button>
+                <button class="btn religion-btn" data-religion="muslim">مسلم</button>
+                <button class="btn religion-btn" data-religion="christian">مسيحي</button>
+                <button class="btn religion-btn" data-religion="hindu">هندوسي</button>
+                <button class="btn religion-btn" data-religion="buddhist">بوذي</button>
+                <button class="btn religion-btn" data-religion="jewish">يهودي</button>
+                <button class="btn religion-btn" data-religion="other">آخر</button>
+            </div>
+        </div>
+
+        <!-- الصف الرابع: المفاتيح (Keys) -->
+        <div class="row">
+            <span class="row-label" id="rowKeysLabel">🔑 المفاتيح:</span>
+            <button class="btn" id="sectToggle">☯️ الطوائف</button>
+            <button class="btn" id="corridorsToggle">⛵ الممرات</button>
+            <button class="btn" id="densitySpotsToggle">🔴 بؤر</button>
+            <button class="btn" id="capitalsToggle">🏙️ عواصم</button>
+            <button class="btn" id="timezonesToggle">🕐 مناطق</button>
+        </div>
     </div>
-    <span class="divider"></span>
-    <span class="control-label" id="filterLabel">🎯 فلتر:</span>
-    <div class="control-group" id="religionButtons">
-        <button class="btn religion-btn active" data-religion="all">الكل</button>
-        <button class="btn religion-btn" data-religion="muslim">مسلم</button>
-        <button class="btn religion-btn" data-religion="christian">مسيحي</button>
-        <button class="btn religion-btn" data-religion="hindu">هندوسي</button>
-        <button class="btn religion-btn" data-religion="buddhist">بوذي</button>
-        <button class="btn religion-btn" data-religion="jewish">يهودي</button>
-        <button class="btn religion-btn" data-religion="other">آخر</button>
-    </div>
-    <span class="divider"></span>
-    <button class="btn" id="sectToggle">☯️ الطوائف</button>
-    <button class="btn" id="corridorsToggle">⛵ الممرات</button>
-    <button class="btn" id="densitySpotsToggle">🔴 بؤر</button>
-    <button class="btn" id="capitalsToggle">🏙️ عواصم</button>
-    <button class="btn" id="timezonesToggle">🕐 مناطق</button>
-    <button class="btn" id="copyLinkBtn" title="نسخ الرابط">📋</button>
-    <span class="divider"></span>
-    <div class="search-box">
-        <input type="text" id="searchInput" placeholder="بحث..." autocomplete="off">
-        <ul class="suggestions-list" id="suggestionsList"></ul>
-    </div>
-    <button class="btn" id="resetBtn">↺ إعادة</button>
-</div>
+
     <div class="copy-notification" id="copyNotification"></div>
 </div>
 
@@ -277,7 +316,12 @@
             dstActive:'صيفي',dstInactive:'شتوي',dstSuffix:'(UTC{std} شتوي، UTC{dst} صيفي)',
             coordinates:'خط الطول: {lon} | خط العرض: {lat}',
             copySuccess:'تم نسخ الرابط!',
-            copyFail:'فشل النسخ'
+            copyFail:'فشل النسخ',
+            // عناوين الصفوف الجديدة
+            rowLangLabel:'🌐 اللغة:',
+            rowModeLabel:'🎨 الوضع:',
+            rowFilterLabel:'🎯 التقسيم:',
+            rowKeysLabel:'🔑 المفاتيح:'
         },
         en: {
             langLabel:'🌐 Language:',langButton:'English',modeLabel:'🎨 Mode:',mode_religion:'🕌 Religion',mode_terrain:'🏔️ Terrain',mode_density:'👥 Density',mode_precipitation:'🌧️ Precipitation',mode_temperature:'🌡️ Temperature',mode_normal:'🌍 Normal',
@@ -300,7 +344,12 @@
             dstActive:'Summer',dstInactive:'Winter',dstSuffix:'(UTC{std} winter, UTC{dst} summer)',
             coordinates:'Lon: {lon} | Lat: {lat}',
             copySuccess:'Link copied!',
-            copyFail:'Copy failed'
+            copyFail:'Copy failed',
+            // New row labels
+            rowLangLabel:'🌐 Language:',
+            rowModeLabel:'🎨 Mode:',
+            rowFilterLabel:'🎯 Division:',
+            rowKeysLabel:'🔑 Keys:'
         }
     };
     function t(key,params={}){let s=i18n[lang]?.[key]||i18n.en[key]||key;for(let[k,v]of Object.entries(params))s=s.replace(`{${k}}`,v);return s;}
@@ -1423,20 +1472,36 @@
     function setLanguage(l) { lang = l; applyLanguage(); }
 
     function applyLanguage() {
+        // تحديث عناوين الصفوف
+        document.getElementById('rowLangLabel').textContent = t('rowLangLabel');
+        document.getElementById('rowModeLabel').textContent = t('rowModeLabel');
+        document.getElementById('rowFilterLabel').textContent = t('rowFilterLabel');
+        document.getElementById('rowKeysLabel').textContent = t('rowKeysLabel');
+
+        // تحديث باقي العناصر
         document.querySelectorAll('[id$="Label"]').forEach(el => {
             if (el.id === 'langLabel') el.textContent = t('langLabel');
             else if (el.id === 'modeLabel') el.textContent = t('modeLabel');
             else if (el.id === 'filterLabel') el.textContent = t('filterLabel');
         });
-        langToggle.textContent = t('langButton'); sectToggle.textContent = t('sectToggle'); corridorsToggle.textContent = t('corridorsToggle');
-        densitySpotsToggle.textContent = t('densitySpotsToggle'); capitalsToggle.textContent = t('capitalsToggle'); timezonesToggle.textContent = t('timezonesToggle');
-        copyLinkBtn.title = t('copyLinkBtn'); resetBtn.textContent = t('resetBtn');
+        // زر اللغة يجب أن يعكس اللغة المستهدفة
+        langToggle.textContent = lang === 'ar' ? 'English' : 'العربية';
+        sectToggle.textContent = t('sectToggle');
+        corridorsToggle.textContent = t('corridorsToggle');
+        densitySpotsToggle.textContent = t('densitySpotsToggle');
+        capitalsToggle.textContent = t('capitalsToggle');
+        timezonesToggle.textContent = t('timezonesToggle');
+        copyLinkBtn.title = t('copyLinkBtn');
+        resetBtn.textContent = t('resetBtn');
         modeButtons.forEach(b => b.textContent = t(`mode_${b.dataset.mode}`));
         religionButtons.forEach(b => b.textContent = t(`religion_${b.dataset.religion}`));
-        zoomInBtn.title = t('zoomIn'); zoomOutBtn.title = t('zoomOut'); zoomResetBtn.title = t('zoomReset');
+        zoomInBtn.title = t('zoomIn');
+        zoomOutBtn.title = t('zoomOut');
+        zoomResetBtn.title = t('zoomReset');
         searchInput.placeholder = t('searchPlaceholder');
         exportBtn.title = t('exportLabel');
-        updateInfoOverlay(); updateAllStyles();
+        updateInfoOverlay();
+        updateAllStyles();
     }
     function updateInfoOverlay() { infoOverlay.textContent = t('infoOverlay', {zoom: currentTransform.k.toFixed(1)}); }
 
