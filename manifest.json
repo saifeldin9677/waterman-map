@@ -2,9 +2,17 @@
   "name": "خريطة Waterman Butterfly",
   "short_name": "الخريطة",
   "description": "خريطة Waterman Butterfly متعددة الطبقات تعمل دون اتصال",
-  "start_url": "./index.html",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#1a1d23",
   "theme_color": "#1a1d23",
-  "orientation": "any"
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦋</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }
