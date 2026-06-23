@@ -1498,24 +1498,24 @@
         projection = setupProjection(width, height); pathGen = d3.geoPath(projection);
     }
 
-    // ========== الدالة المعدلة: حجم النسبي للشاشة (يعاكس التكبير) ==========
+    // ========== الدالة المعدلة: حجم يتغير عكسياً مع التكبير ليظل ثابتاً بالنسبة للشاشة ==========
     function getLabelFontSize() {
-        const baseSize = 7; // الحجم الأساسي المرئي في مستوى التكبير 1x
+        const baseSize = 8; // الحجم الأساسي عند مستوى التكبير 1x (مرئي للعين)
         const zoom = currentTransform.k || 1;
-        // الحجم يتغير عكسيًا مع التكبير ليظل ثابتًا على الشاشة
+        // الحجم يتغير عكسياً: كلما زاد التكبير صغر الخط ليعوض التضخم
         let size = baseSize / zoom;
-        // حدود قصوى لتجنب الصغر المفرط أو الكبر المزعج عند أقصى تكبير/تصغير
-        size = Math.max(2.5, Math.min(12, size));
+        // حدود قصوى لتفادي الصغر الشديد أو الكبر المفرط
+        size = Math.max(2.5, Math.min(14, size));
         if (window.innerWidth < 768) {
             size = size * 0.9;
         }
         return size;
     }
 
-    // دالة العتبة للمساحة (تتحكم في اختفاء التسميات عند التصغير)
+    // دالة العتبة للمساحة: تتحكم في ظهور/اختفاء التسميات (تظهر الدول الكبيرة، تختفي الصغيرة عند التصغير)
     function getAreaThreshold() {
-        const zoom = currentTransform.k;
-        let threshold = 0.004 / (zoom + 0.2);
+        const zoom = currentTransform.k || 1;
+        let threshold = 0.003 / (zoom + 0.2);
         if (window.innerWidth < 768) {
             threshold = threshold * 1.2;
         }
@@ -1571,7 +1571,7 @@
         });
     }
 
-    // ========== رسم العواصم (أحجام ثابتة) ==========
+    // ========== رسم العواصم ==========
     function drawCapitals() {
         gCapitals.selectAll('*').remove();
         if (!capitalsVisible) return;
@@ -1608,7 +1608,7 @@
         });
     }
 
-    // ========== رسم تسميات الدول (بحيث تظل ثابتة بالنسبة للشاشة) ==========
+    // ========== رسم تسميات الدول ==========
     function drawCountryLabels(features) {
         if (countryLabelSelection) {
             countryLabelSelection.remove();
@@ -1666,9 +1666,8 @@
             const data = el.datum();
             if (!data) return;
             const area = data.area;
-            // تحديث الحجم بناءً على التكبير الحالي
+            // تحديث الحجم والرؤية
             el.attr('font-size', fontSize + 'px');
-            // تحديث الرؤية
             if (area < threshold) {
                 el.style('opacity', 0);
             } else {
@@ -1679,7 +1678,7 @@
         });
     }
 
-    // ========== تحسين حدث التكبير ==========
+    // ========== دالة التكبير ==========
     function setupZoom() {
         const {width, height} = getContainerDimensions();
         zoomBehavior = d3.zoom().scaleExtent([0.5, 6]).translateExtent([[-width*0.8, -height*0.8], [width*1.8, height*1.8]])
@@ -1697,7 +1696,7 @@
         svg.call(zoomBehavior); svg.on('dblclick.zoom', null);
     }
 
-    // ========== بقية الدوال ==========
+    // ========== بقية الدوال الأساسية ==========
     function renderCountries(features) {
         allCountryFeatures = features;
         ensureCountryData(features);
