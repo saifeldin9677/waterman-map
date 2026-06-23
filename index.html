@@ -168,7 +168,6 @@
         }
 
         .country-label {
-            font-size: 7px;
             font-weight: 600;
             fill: #e0e0e0;
             text-anchor: middle;
@@ -1499,7 +1498,32 @@
         projection = setupProjection(width, height); pathGen = d3.geoPath(projection);
     }
 
-    // ========== رسم الممرات كخطوط مع نقاط صغيرة ==========
+    // ========== دوال مساعدة لحجم التسميات حسب التكبير والشاشة ==========
+    function getLabelFontSize() {
+        const base = 7;
+        const zoom = currentTransform.k;
+        // حجم يتناسب مع التكبير، مع حد أدنى 5 وأقصى 9
+        let size = base * Math.sqrt(zoom);
+        size = Math.max(5, Math.min(9, size));
+        // على الشاشات الصغيرة، نقلل الحجم قليلاً
+        if (window.innerWidth < 768) {
+            size = size * 0.85;
+        }
+        return size;
+    }
+
+    function getAreaThreshold() {
+        const zoom = currentTransform.k;
+        const baseThreshold = 0.003; // أقل من السابق
+        // على الهواتف، نرفع العتبة قليلاً لتقليل التداخل
+        let threshold = baseThreshold / zoom;
+        if (window.innerWidth < 768) {
+            threshold = threshold * 1.3;
+        }
+        return threshold;
+    }
+
+    // ========== رسم الممرات ==========
     function drawCorridors() {
         gCorridors.selectAll('*').remove();
         if (!corridorsVisible) return;
@@ -1556,7 +1580,6 @@
             if (!info.capital_coords) return;
             const [x, y] = projection(info.capital_coords);
             if (isNaN(x) || isNaN(y)) return;
-            // أحجام ثابتة بغض النظر عن التكبير
             gCapitals.append('circle')
                 .attr('cx', x).attr('cy', y)
                 .attr('r', 8)
@@ -1586,21 +1609,21 @@
         });
     }
 
-    // ========== رسم تسميات الدول (أحجام ثابتة) ==========
+    // ========== رسم تسميات الدول (بحجم متغير) ==========
     function drawCountryLabels(features) {
         if (countryLabelSelection) {
             countryLabelSelection.remove();
             countryLabelSelection = null;
         }
-        const zoom = currentTransform.k;
+        const threshold = getAreaThreshold();
+        const fontSize = getLabelFontSize();
         const labelGroup = gCountries.append('g').attr('class', 'country-label-group');
         const labels = [];
         features.forEach(d => {
             const name = d.properties?.name || '';
             const displayName = lang === 'ar' ? getArabicName(name) : name;
             const area = d3.geoArea(d);
-            // عتبة أعلى قليلاً لتحسين الأداء
-            if (area < 0.004 / zoom) return;
+            if (area < threshold) return;
             
             let centroid;
             if (labelPositions[name]) {
@@ -1623,7 +1646,7 @@
                 .attr('x', x).attr('y', y)
                 .attr('class', 'country-label')
                 .text(displayName)
-                .attr('font-size', '7px') // حجم ثابت
+                .attr('font-size', fontSize + 'px')
                 .attr('fill', '#e0e0e0')
                 .attr('text-anchor', 'middle')
                 .attr('dominant-baseline', 'central')
@@ -1637,18 +1660,21 @@
 
     function updateLabels() {
         if (!countryLabelSelection) return;
-        const zoom = currentTransform.k;
+        const threshold = getAreaThreshold();
+        const fontSize = getLabelFontSize();
         countryLabelSelection.each(function(d) {
             const el = d3.select(this);
             const data = el.datum();
             if (!data) return;
             const area = data.area;
-            // فقط نضبط الرؤية (opacity) دون تغيير حجم الخط
-            if (area < 0.004 / zoom) {
+            // تحديث الحجم
+            el.attr('font-size', fontSize + 'px');
+            // تحديث الرؤية
+            if (area < threshold) {
                 el.style('opacity', 0);
             } else {
                 el.style('opacity', 1);
-                // تحديث النص إذا تغيرت اللغة (نادر)
+                // تحديث النص إذا تغيرت اللغة
                 const newDisplay = lang === 'ar' ? getArabicName(data.name) : data.name;
                 if (el.text() !== newDisplay) el.text(newDisplay);
             }
@@ -1666,14 +1692,14 @@
                 updateHash();
                 if (zoomRAF) cancelAnimationFrame(zoomRAF);
                 zoomRAF = requestAnimationFrame(() => {
-                    updateLabels(); // فقط تحديث الرؤية
+                    updateLabels(); // تحديث الحجم والرؤية فقط
                     zoomRAF = null;
                 });
             });
         svg.call(zoomBehavior); svg.on('dblclick.zoom', null);
     }
 
-    // ========== بقية الدوال (مع تحسينات) ==========
+    // ========== بقية الدوال ==========
     function renderCountries(features) {
         allCountryFeatures = features;
         ensureCountryData(features);
