@@ -1736,15 +1736,14 @@ window.addEventListener('resize', () => {
     drawCapitals();
     drawTimezones();
 });
-    // =============================
-    // 🚀 تسجيل Service Worker (الإضافة الجديدة) باستخدام المسار التلقائي
-    // =============================
-    if ('serviceWorker' in navigator) {
-        // نستخدم BASE الذي حددناه في الأعلى
-        navigator.serviceWorker.register(BASE + 'sw.js', { scope: BASE })
-            .then(reg => console.log('✅ Service Worker مسجل بنجاح:', reg))
-            .catch(err => console.error('❌ فشل تسجيل Service Worker:', err));
-    }
+// تسجيل Service Worker بالمسار الصحيح تلقائياً
+if ('serviceWorker' in navigator) {
+    // يكتشف المسار الذي يعمل فيه الموقع (مثل /waterman-map/)
+    const basePath = window.location.pathname.replace(/\/[^\/]*$/, '/');
+    navigator.serviceWorker.register(basePath + 'sw.js', { scope: basePath })
+        .then(reg => console.log('✅ Service Worker مسجل بنجاح:', reg))
+        .catch(err => console.error('❌ فشل تسجيل Service Worker:', err));
+}
 
     init().then(() => console.log('🦋 زر البؤر ينقلك للكثافة تلقائياً'));
 })();
