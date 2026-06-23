@@ -1498,6 +1498,2352 @@
         projection = setupProjection(width, height); pathGen = d3.geoPath(projection);
     }
 
+    // ========== الدالة المعدلة: حجم مناسب للشاشة مع عكس التكبير (تم رفع الحجم الأساسي) ==========
+    function getLabelFontSize() {
+        const baseSize = 13; // تم رفع الحجم الأساسي من 7 إلى 13 ليصبح واضحًا وكبيرًا
+        const zoom = currentTransform.k || 1;
+        // الحجم يتغير عكسيًا مع التكبير ليظل ثابتًا بصريًا على الشاشة
+        let size = baseSize / zoom;
+        // حدود قصوى: لا يصغر جدًا ولا يكبر جدًا
+        size = Math.max(3.5, Math.min(18, size));
+        if (window.innerWidth < 768) {
+            size = size * 0.9; // تقليل بسيط على الهواتف
+        }
+        return size;
+    }
+
+    // دالة العتبة للمساحة (تتحكم في اختفاء التسميات عند التصغير)
+    function getAreaThreshold() {
+        const zoom = currentTransform.k;
+        let threshold = 0.004 / (zoom + 0.2);
+        if (window.innerWidth < 768) {
+            threshold = threshold * 1.2;
+        }
+        return threshold;
+    }
+
+    // ========== رسم الممرات ==========
+    function drawCorridors() {
+        gCorridors.selectAll('*').remove();
+        if (!corridorsVisible) return;
+        const color = getCorridorColor();
+        corridorsData.forEach(c => {
+            const points = c.coords;
+            const glowPath = gCorridors.append('path')
+                .datum({type:'LineString', coordinates: points})
+                .attr('d', pathGen)
+                .attr('class', 'corridor-glow')
+                .attr('stroke', color)
+                .attr('stroke-width', 8)
+                .attr('opacity', 0.3);
+            const mainPath = gCorridors.append('path')
+                .datum({type:'LineString', coordinates: points})
+                .attr('d', pathGen)
+                .attr('class', 'corridor-line')
+                .attr('stroke', color)
+                .attr('stroke-width', 2.5)
+                .attr('opacity', 0.9);
+            const first = points[0];
+            const last = points[points.length-1];
+            [first, last].forEach((p, idx) => {
+                const [x, y] = projection(p);
+                if (isNaN(x) || isNaN(y)) return;
+                const r = 3.5;
+                gCorridors.append('circle')
+                    .attr('cx', x).attr('cy', y)
+                    .attr('r', r)
+                    .attr('fill', color)
+                    .attr('stroke', '#fff')
+                    .attr('stroke-width', 0.5)
+                    .attr('vector-effect', 'non-scaling-stroke')
+                    .attr('class', 'corridor-dot');
+            });
+            mainPath.on('mouseenter', () => {
+                tooltip.innerHTML = `<strong>${lang === 'ar' ? c.name_ar : c.name_en}</strong><br>${t(c.type === 'sea' ? 'seaRoute' : 'landRoute')}`;
+                tooltip.classList.add('visible');
+            })
+            .on('mousemove', e => {
+                const r = mapContainer.getBoundingClientRect();
+                tooltip.style.left = (e.clientX - r.left + 16) + 'px';
+                tooltip.style.top = (e.clientY - r.top - 50) + 'px';
+            })
+            .on('mouseleave', () => tooltip.classList.remove('visible'));
+        });
+    }
+
+    // ========== رسم العواصم (أحجام ثابتة) ==========
+    function drawCapitals() {
+        gCapitals.selectAll('*').remove();
+        if (!capitalsVisible) return;
+        Object.entries(countryInfo).forEach(([name, info]) => {
+            if (!info.capital_coords) return;
+            const [x, y] = projection(info.capital_coords);
+            if (isNaN(x) || isNaN(y)) return;
+            gCapitals.append('circle')
+                .attr('cx', x).attr('cy', y)
+                .attr('r', 8)
+                .attr('class', 'capital-halo')
+                .attr('fill', '#ffd700')
+                .attr('opacity', 0.2)
+                .attr('vector-effect', 'non-scaling-stroke');
+            gCapitals.append('circle')
+                .attr('cx', x).attr('cy', y)
+                .attr('r', 3.5)
+                .attr('class', 'capital-dot')
+                .attr('fill', '#ffd700')
+                .attr('stroke', '#000')
+                .attr('stroke-width', 0.5)
+                .attr('vector-effect', 'non-scaling-stroke');
+            const label = lang === 'ar' ? info.capital_ar : info.capital_en;
+            gCapitals.append('text')
+                .attr('x', x + 8)
+                .attr('y', y - 2)
+                .attr('class', 'capital-label')
+                .text(label)
+                .attr('font-size', '6px')
+                .attr('fill', '#fff')
+                .attr('text-anchor', 'start')
+                .attr('dominant-baseline', 'central')
+                .attr('vector-effect', 'non-scaling-stroke');
+        });
+    }
+
+    // ========== رسم تسميات الدول (بحيث تظل ثابتة بالنسبة للشاشة) ==========
+    function drawCountryLabels(features) {
+        if (countryLabelSelection) {
+            countryLabelSelection.remove();
+            countryLabelSelection = null;
+        }
+        const threshold = getAreaThreshold();
+        const fontSize = getLabelFontSize();
+        const labelGroup = gCountries.append('g').attr('class', 'country-label-group');
+        const labels = [];
+        features.forEach(d => {
+            const name = d.properties?.name || '';
+            const displayName = lang === 'ar' ? getArabicName(name) : name;
+            const area = d3.geoArea(d);
+            if (area < threshold) return;
+            
+            let centroid;
+            if (labelPositions[name]) {
+                const [lon, lat] = labelPositions[name];
+                centroid = projection([lon, lat]);
+            } else {
+                const c = d3.geoCentroid(d);
+                centroid = projection(c);
+            }
+            if (!centroid || isNaN(centroid[0]) || isNaN(centroid[1])) {
+                try {
+                    const c = d3.geoPath(projection).centroid(d);
+                    if (c && !isNaN(c[0]) && !isNaN(c[1])) centroid = c;
+                } catch(e) {}
+            }
+            if (!centroid || isNaN(centroid[0]) || isNaN(centroid[1])) return;
+            
+            const x = centroid[0], y = centroid[1];
+            const text = labelGroup.append('text')
+                .attr('x', x).attr('y', y)
+                .attr('class', 'country-label')
+                .text(displayName)
+                .attr('font-size', fontSize + 'px')
+                .attr('fill', '#e0e0e0')
+                .attr('text-anchor', 'middle')
+                .attr('dominant-baseline', 'central')
+                .attr('vector-effect', 'non-scaling-stroke')
+                .attr('style', 'text-shadow: 0 0 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6)');
+            text.datum({ feature: d, area: area, name: name, displayName: displayName });
+            labels.push(text);
+        });
+        countryLabelSelection = labelGroup.selectAll('.country-label');
+    }
+
+    function updateLabels() {
+        if (!countryLabelSelection) return;
+        const threshold = getAreaThreshold();
+        const fontSize = getLabelFontSize();
+        countryLabelSelection.each(function(d) {
+            const el = d3.select(this);
+            const data = el.datum();
+            if (!data) return;
+            const area = data.area;
+            // تحديث الحجم بناءً على التكبير الحالي
+            el.attr('font-size', fontSize + 'px');
+            // تحديث الرؤية
+            if (area < threshold) {
+                el.style('opacity', 0);
+            } else {
+                el.style('opacity', 1);
+                const newDisplay = lang === 'ar' ? getArabicName(data.name) : data.name;
+                if (el.text() !== newDisplay) el.text(newDisplay);
+            }
+        });
+    }
+
+    // ========== تحسين حدث التكبير ==========
+    function setupZoom() {
+        const {width, height} = getContainerDimensions();
+        zoomBehavior = d3.zoom().scaleExtent([0.5, 6]).translateExtent([[-width*0.8, -height*0.8], [width*1.8, height*1.8]])
+            .on('zoom', e => { 
+                currentTransform = e.transform; 
+                gMap.attr('transform', currentTransform.toString()); 
+                updateInfoOverlay(); 
+                updateHash();
+                if (zoomRAF) cancelAnimationFrame(zoomRAF);
+                zoomRAF = requestAnimationFrame(() => {
+                    updateLabels();
+                    zoomRAF = null;
+                });
+            });
+        svg.call(zoomBehavior); svg.on('dblclick.zoom', null);
+    }
+
+    // ========== بقية الدوال ==========
+    function renderCountries(features) {
+        allCountryFeatures = features;
+        ensureCountryData(features);
+        countryNamesList = features.map(f => f.properties?.name || '').filter(n => n);
+        gCountries.selectAll('*').remove();
+        countryPaths = gCountries.selectAll('path')
+            .data(features)
+            .join('path')
+            .attr('d', pathGen)
+            .attr('fill', d => getCountryFill(d))
+            .attr('stroke', d => getStroke(d))
+            .attr('stroke-width', d => getStrokeWidth(d))
+            .attr('opacity', d => getOpacity(d))
+            .attr('cursor', 'pointer')
+            .attr('vector-effect', 'non-scaling-stroke');
+
+        countryPaths.on('mouseenter', function(e, d) {
+            const name = d.properties?.name || '';
+            let displayName = lang === 'ar' ? getArabicName(name) : name;
+            const rel = getReligion(name); const denom = sectMode ? getDenomination(name) : null;
+            let html = `<div class="country-name">${displayName}</div>`;
+            if (colorMode === 'religion' && sectMode && denom) {
+                const denomLabel = (lang === 'ar' && denominationArabic[denom]) ? denominationArabic[denom] : (lang === 'ar' && religionArabic[rel]) ? religionArabic[rel] : denom;
+                html += `<div>${t('tooltipDenom')}: ${denomLabel}</div>`;
+            } else if (colorMode === 'religion') {
+                const relLabel = (lang === 'ar' && religionArabic[rel]) ? religionArabic[rel] : rel;
+                html += `<div>${t('tooltipReligion')}: ${relLabel}</div>`;
+            }
+            if (colorMode === 'terrain') { const elev = getElevation(name); html += `<div>${t('tooltipElevation')}: ${elev !== null ? elev + ' ' + t('elevationUnit') : t('unknown')}</div>`; }
+            if (colorMode === 'density') { const dens = getDensity(name); html += `<div>${t('tooltipDensity')}: ${dens !== null ? dens + ' ' + t('densityUnit') : t('unknown')}</div>`; }
+            if (colorMode === 'precipitation') { const prec = getPrecipitation(name); html += `<div>${t('tooltipPrecipitation')}: ${prec !== null ? prec + ' ' + t('precipitationUnit') : t('unknown')}</div>`; }
+            if (colorMode === 'temperature') { const temp = getTemperature(name, d); html += `<div>${t('temperature')}: ${temp !== null ? temp + '°C' : t('unknown')}</div>`; }
+            tooltip.innerHTML = html; tooltip.classList.add('visible');
+            d3.select(this).attr('stroke', '#fff').attr('stroke-width', 1.5);
+        })
+        .on('mousemove', e => { const r = mapContainer.getBoundingClientRect(); tooltip.style.left = (e.clientX - r.left + 16) + 'px'; tooltip.style.top = (e.clientY - r.top - 50) + 'px'; })
+        .on('mouseleave', function() { tooltip.classList.remove('visible'); d3.select(this).attr('stroke', d => getStroke(d)).attr('stroke-width', d => getStrokeWidth(d)); })
+        .on('click', function(e, d) {
+            if (e.shiftKey && selectedCountry) {
+                compareCountry = d;
+                renderComparePanel(selectedCountry, compareCountry);
+            } else {
+                selectedCountry = d;
+                compareCountry = null;
+                renderCountryPanel(d);
+                highlightSelectedCountry(d);
+            }
+        });
+
+        drawCountryLabels(features);
+        drawCorridors();
+        updateLegend();
+    }
+
+    function ensureCountryData(features) {
+        features.forEach(d => {
+            const name = d.properties?.name || '';
+            const clean = getCleanName(name);
+            if (!countryInfo[name] && !countryInfo[clean]) {
+                const centroid = d3.geoCentroid(d);
+                const area = d3.geoArea(d);
+                const earthAreaKm2 = 510072000;
+                const steradTotal = 4 * Math.PI;
+                const areaKm2 = Math.round(area / steradTotal * earthAreaKm2);
+                let capitalCoords = [0,0];
+                if (centroid && !isNaN(centroid[0])) capitalCoords = [centroid[0], centroid[1]];
+                const langName = lang === 'ar' ? 'غير معروف' : 'Unknown';
+                countryInfo[name] = {
+                    capital_ar: lang === 'ar' ? 'غير معروف' : 'Unknown',
+                    capital_en: 'Unknown',
+                    capital_coords: capitalCoords,
+                    population_2026: Math.round(areaKm2 * 50 / 1000000 * 10) / 10,
+                    area: areaKm2,
+                    lang_ar: langName,
+                    lang_en: 'Unknown'
+                };
+                if (!arabicNames[name] && !arabicNames[clean]) {
+                    arabicNames[name] = name;
+                }
+            }
+            if (!continentByCountry[name] && !continentByCountry[clean]) {
+                continentByCountry[name] = getContinent(name);
+            }
+            if (!governmentByCountry[name] && !governmentByCountry[clean]) {
+                governmentByCountry[name] = 'Unknown';
+            }
+        });
+    }
+
+    function renderCountryPanel(d) {
+        const name = d.properties?.name || '';
+        const displayName = lang === 'ar' ? getArabicName(name) : name;
+        let info = countryInfo[name] || countryInfo[getCleanName(name)];
+        let population = info ? info.population_2026 : null;
+        let area = info ? info.area : null;
+        let density = null;
+        if (!info) {
+            try {
+                const areaSterad = d3.geoArea(d);
+                const earthAreaKm2 = 510072000;
+                const steradTotal = 4 * Math.PI;
+                area = Math.round(areaSterad / steradTotal * earthAreaKm2);
+                if (area > 0) {
+                    density = getDensity(name);
+                    population = Math.round(area * density / 1000000 * 10) / 10;
+                }
+            } catch(e) { area = null; population = null; }
+        } else {
+            density = getDensity(name);
+        }
+
+        let localTimeStr = t('unknown');
+        if (info && info.capital_coords) {
+            const baseOffset = Math.round(info.capital_coords[0] / 15);
+            const observesDST = dstCountries.has(name);
+            const isDST = observesDST && isDSTActive(name, baseOffset);
+            const currentOffset = isDST ? baseOffset + 1 : baseOffset;
+            const sign = currentOffset >= 0 ? '+' : '';
+            const now = new Date();
+            const utcHours = now.getUTCHours() + currentOffset;
+            const localHours = ((utcHours % 24) + 24) % 24;
+            const localMinutes = String(now.getUTCMinutes()).padStart(2, '0');
+            localTimeStr = `${String(localHours).padStart(2, '0')}:${localMinutes} (UTC${sign}${currentOffset}`;
+            if (observesDST) {
+                const dstSign = (baseOffset + 1) >= 0 ? '+' : '';
+                const baseSign = baseOffset >= 0 ? '+' : '';
+                if (isDST) {
+                    localTimeStr += ` ${t('dstActive')}، UTC${baseSign}${baseOffset} ${t('dstInactive')}`;
+                } else {
+                    localTimeStr += ` ${t('dstInactive')}، UTC${dstSign}${baseOffset + 1} ${t('dstActive')}`;
+                }
+            }
+            localTimeStr += ')';
+        }
+
+        const continent = getContinent(name);
+        const government = getGovernment(name);
+        const continentLabel = lang === 'ar' ? (continentArabic[continent] || continent) : continent;
+        const govLabel = lang === 'ar' ? (governmentArabic[government] || government) : government;
+
+        let html = `<h3>${displayName}</h3>`;
+        html += `<p><strong>${t('continent')}:</strong> ${continentLabel}</p>`;
+        html += `<p><strong>${t('government')}:</strong> ${govLabel}</p>`;
+        if (info || area) {
+            const capital = info ? (lang === 'ar' ? info.capital_ar : info.capital_en) : (lang === 'ar' ? 'غير محدد' : 'N/A');
+            const language = info ? (lang === 'ar' ? info.lang_ar : info.lang_en) : (lang === 'ar' ? 'غير محدد' : 'N/A');
+            html += `<p><strong>${t('capital')}:</strong> ${capital}</p>`;
+            html += `<p><strong>${t('areaTitle')}:</strong> ${area ? area.toLocaleString('en') : t('unknown')} ${t('km2')}</p>`;
+            html += `<p><strong>${t('densityTitle')}:</strong> ${density !== null ? density + ' ' + t('densityUnit') : t('unknown')}</p>`;
+            html += `<p><strong>${t('populationTitle')}:</strong> ${population ? '~' + population + ' ' + t('million') : t('unknown')}</p>`;
+            html += `<p><strong>${t('languageTitle')}:</strong> ${language}</p>`;
+            html += `<p><strong>🕒 ${t('localTime')}:</strong> ${localTimeStr}</p>`;
+        } else {
+            html += `<p>${t('unknown')}</p>`;
+        }
+        panelContent.innerHTML = html;
+        countryPanel.style.display = 'block';
+    }
+
+    function renderComparePanel(d1, d2) {
+        const name1 = d1.properties?.name || '';
+        const name2 = d2.properties?.name || '';
+        const displayName1 = lang === 'ar' ? getArabicName(name1) : name1;
+        const displayName2 = lang === 'ar' ? getArabicName(name2) : name2;
+        const info1 = countryInfo[name1] || countryInfo[getCleanName(name1)];
+        const info2 = countryInfo[name2] || countryInfo[getCleanName(name2)];
+        const area1 = info1 ? info1.area : null;
+        const area2 = info2 ? info2.area : null;
+        const dens1 = getDensity(name1);
+        const dens2 = getDensity(name2);
+        const pop1 = info1 ? info1.population_2026 : null;
+        const pop2 = info2 ? info2.population_2026 : null;
+        const rel1 = getReligion(name1);
+        const rel2 = getReligion(name2);
+        const relLabel1 = (lang === 'ar' && religionArabic[rel1]) ? religionArabic[rel1] : rel1;
+        const relLabel2 = (lang === 'ar' && religionArabic[rel2]) ? religionArabic[rel2] : rel2;
+
+        let html = `<h3>${t('compareTitle')} ${displayName1} ↔ ${displayName2}</h3>`;
+        html += `<table style="width:100%;font-size:0.85em;text-align:center">`;
+        html += `<tr><td></td><td><strong>${displayName1}</strong></td><td><strong>${displayName2}</strong></td></tr>`;
+        html += `<tr><td>${t('areaTitle')}</td><td>${area1 ? area1.toLocaleString('en') : '?'}</td><td>${area2 ? area2.toLocaleString('en') : '?'}</td></tr>`;
+        html += `<tr><td>${t('densityTitle')}</td><td>${dens1}</td><td>${dens2}</td></tr>`;
+        html += `<tr><td>${t('populationTitle')}</td><td>${pop1 ? '~'+pop1 : '?'}</td><td>${pop2 ? '~'+pop2 : '?'}</td></tr>`;
+        html += `<tr><td>${t('tooltipReligion')}</td><td>${relLabel1}</td><td>${relLabel2}</td></tr>`;
+        html += `</table><br><button class="btn" id="closeCompareBtn">${t('closeCompare')}</button>`;
+        panelContent.innerHTML = html;
+        countryPanel.style.display = 'block';
+        document.getElementById('closeCompareBtn')?.addEventListener('click', () => {
+            compareCountry = null;
+            if (selectedCountry) renderCountryPanel(selectedCountry);
+        });
+    }
+
+    function exportCountryData() {
+        if (!selectedCountry) return;
+        const name = selectedCountry.properties?.name || '';
+        const info = countryInfo[name] || countryInfo[getCleanName(name)];
+        let text = `Country: ${name}\n`;
+        if (info) {
+            text += `Capital: ${info.capital_en}\n`;
+            text += `Area: ${info.area} km²\n`;
+            text += `Population (2026 est.): ${info.population_2026} million\n`;
+            text += `Language: ${info.lang_en}\n`;
+            text += `Density: ${getDensity(name)} people/km²\n`;
+        }
+        const blob = new Blob([text], {type:'text/plain'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${t('exportFilename')}_${name.replace(/\s/g,'_')}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function copyCurrentLink() {
+        const url = window.location.href.split('#')[0] + window.location.hash;
+        navigator.clipboard.writeText(url).then(() => {
+            copyNotification.textContent = t('copySuccess');
+            copyNotification.classList.add('show');
+            setTimeout(() => copyNotification.classList.remove('show'), 2000);
+        }).catch(() => {
+            copyNotification.textContent = t('copyFail');
+            copyNotification.classList.add('show');
+            setTimeout(() => copyNotification.classList.remove('show'), 2000);
+        });
+    }
+
+    function updateAllStyles() {
+        if (!countryPaths) return;
+        countryPaths.transition().duration(400)
+            .attr('fill', d => getCountryFill(d))
+            .attr('stroke', d => getStroke(d))
+            .attr('stroke-width', d => getStrokeWidth(d))
+            .attr('opacity', d => getOpacity(d));
+        if (countryLabelSelection) {
+            countryLabelSelection.remove();
+            countryLabelSelection = null;
+        }
+        drawCountryLabels(allCountryFeatures);
+        drawPhysicalFeatures();
+        drawCorridors();
+        drawDensitySpots();
+        drawCapitals();
+        drawTimezones();
+        updateLegend();
+        if (selectedCountry && countryPanel.style.display === 'block' && !compareCountry) renderCountryPanel(selectedCountry);
+        if (selectedCountry) highlightSelectedCountry(selectedCountry);
+        updateHash();
+    }
+
+    function highlightSelectedCountry(d) {
+        countryPaths.attr('stroke', d => getStroke(d)).attr('stroke-width', d => getStrokeWidth(d)).style('filter', 'none');
+        if (d) {
+            countryPaths.filter(p => p === d)
+                .attr('stroke', '#ffd700')
+                .attr('stroke-width', 2)
+                .style('filter', 'drop-shadow(0 0 4px rgba(255,215,0,0.6))');
+        }
+    }
+
+    function updateLegend() {
+        let html = '';
+        if (colorMode === 'terrain') {
+            html += `<div style="font-weight:700">${t('terrainLegend')}</div>`;
+            const unit = t('elevationUnit');
+            [{l:`<0${unit}`,c:getTerrainColor(-1)},{l:`0-200`,c:getTerrainColor(100)},{l:`200-700`,c:getTerrainColor(500)},{l:`700-2000`,c:getTerrainColor(1500)},{l:`>3000`,c:getTerrainColor(3500)}].forEach(r => html += `<div class="legend-item"><span class="legend-color" style="background:${r.c}"></span>${r.l}</div>`);
+        } else if (colorMode === 'density') {
+            html += `<div style="font-weight:700">${t('densityLegend')}</div>`;
+            [{l:'<10',c:getDensityColor(5)},{l:'10-100',c:getDensityColor(50)},{l:'100-500',c:getDensityColor(300)},{l:'>500',c:getDensityColor(800)}].forEach(r => html += `<div class="legend-item"><span class="legend-color" style="background:${r.c}"></span>${r.l}</div>`);
+        } else if (colorMode === 'precipitation') {
+            html += `<div style="font-weight:700">${t('precipitationLegend')}</div>`;
+            [{l:'<100',c:getPrecipitationColor(50)},{l:'100-600',c:getPrecipitationColor(300)},{l:'600-1500',c:getPrecipitationColor(1000)},{l:'1500-3000',c:getPrecipitationColor(2000)},{l:'>3000',c:getPrecipitationColor(3500)}].forEach(r => html += `<div class="legend-item"><span class="legend-color" style="background:${r.c}"></span>${r.l}</div>`);
+        } else if (colorMode === 'temperature') {
+            html += `<div style="font-weight:700">${t('temperatureLegend')}</div>`;
+            [{l:'<0°C',c:getTempColor(-5)},{l:'0-10°C',c:getTempColor(5)},{l:'10-20°C',c:getTempColor(15)},{l:'20-30°C',c:getTempColor(25)},{l:'>30°C',c:getTempColor(35)}].forEach(r => html += `<div class="legend-item"><span class="legend-color" style="background:${r.c}"></span>${r.l}</div>`);
+        } else if (colorMode === 'normal') {
+            html += `<div>${t('normalLegend')}</div>`;
+        } else {
+            html += `<div>${t('religionLegend')}</div>`;
+            Object.entries(sectMode ? denominationColors : religionColors).forEach(([k,v]) => {
+                const label = sectMode ? ((lang === 'ar' && denominationArabic[k]) ? denominationArabic[k] : k) : ((lang === 'ar' && religionArabic[k]) ? religionArabic[k] : k);
+                html += `<div class="legend-item"><span class="legend-color" style="background:${v}"></span>${label}</div>`;
+            });
+        }
+        if (corridorsVisible) html += `<div>${t('corridorsOn')}</div>`;
+        if (densitySpotsMode && colorMode === 'density') html += `<div>${t('spotsOn')}</div>`;
+        if (capitalsVisible) html += `<div>${t('capitalsOn')}</div>`;
+        if (timezonesVisible) html += `<div>${t('timezonesOn')}</div>`;
+        legendEl.innerHTML = html;
+    }
+
+    function setMode(mode) { colorMode = mode; modeButtons.forEach(b => b.classList.remove('active')); document.querySelector(`.mode-btn[data-mode="${mode}"]`).classList.add('active'); updateAllStyles(); }
+    function toggleSect() { sectMode = !sectMode; sectToggle.classList.toggle('toggle-on', sectMode); if (sectMode && colorMode !== 'religion') setMode('religion'); else updateAllStyles(); }
+    function toggleCorridors() { corridorsVisible = !corridorsVisible; corridorsToggle.classList.toggle('toggle-on', corridorsVisible); drawCorridors(); updateLegend(); }
+    function toggleDensitySpots() {
+        densitySpotsMode = !densitySpotsMode;
+        densitySpotsToggle.classList.toggle('toggle-on', densitySpotsMode);
+        if (densitySpotsMode && colorMode !== 'density') {
+            setMode('density');
+        } else {
+            drawDensitySpots();
+            updateLegend();
+        }
+    }
+    function toggleCapitals() { capitalsVisible = !capitalsVisible; capitalsToggle.classList.toggle('toggle-on', capitalsVisible); drawCapitals(); updateLegend(); }
+    function toggleTimezones() { timezonesVisible = !timezonesVisible; timezonesToggle.classList.toggle('toggle-on', timezonesVisible); drawTimezones(); updateLegend(); }
+    function setLanguage(l) { lang = l; applyLanguage(); }
+
+    function applyLanguage() {
+        document.getElementById('rowLangLabel').textContent = t('rowLangLabel');
+        document.getElementById('rowModeLabel').textContent = t('rowModeLabel');
+        document.getElementById('rowFilterLabel').textContent = t('rowFilterLabel');
+        document.getElementById('rowKeysLabel').textContent = t('rowKeysLabel');
+
+        document.querySelectorAll('[id$="Label"]').forEach(el => {
+            if (el.id === 'langLabel') el.textContent = t('langLabel');
+            else if (el.id === 'modeLabel') el.textContent = t('modeLabel');
+            else if (el.id === 'filterLabel') el.textContent = t('filterLabel');
+        });
+        langToggle.textContent = lang === 'ar' ? 'English' : 'العربية';
+        sectToggle.textContent = t('sectToggle');
+        corridorsToggle.textContent = t('corridorsToggle');
+        densitySpotsToggle.textContent = t('densitySpotsToggle');
+        capitalsToggle.textContent = t('capitalsToggle');
+        timezonesToggle.textContent = t('timezonesToggle');
+        copyLinkBtn.title = t('copyLinkBtn');
+        resetBtn.textContent = t('resetBtn');
+        modeButtons.forEach(b => b.textContent = t(`mode_${b.dataset.mode}`));
+        religionButtons.forEach(b => b.textContent = t(`religion_${b.dataset.religion}`));
+        zoomInBtn.title = t('zoomIn');
+        zoomOutBtn.title = t('zoomOut');
+        zoomResetBtn.title = t('zoomReset');
+        searchInput.placeholder = t('searchPlaceholder');
+        exportBtn.title = t('exportLabel');
+        updateInfoOverlay();
+        if (allCountryFeatures.length) {
+            if (countryLabelSelection) {
+                countryLabelSelection.remove();
+                countryLabelSelection = null;
+            }
+            drawCountryLabels(allCountryFeatures);
+        }
+        updateAllStyles();
+    }
+    function updateInfoOverlay() { infoOverlay.textContent = t('infoOverlay', {zoom: currentTransform.k.toFixed(1)}); }
+
+    function resetZoom() { svg.transition().duration(600).call(zoomBehavior.transform, d3.zoomIdentity); }
+
+    function setupSearch() {
+        searchInput.addEventListener('input', function() {
+            const val = this.value.trim().toLowerCase();
+            suggestionsList.innerHTML = '';
+            if (!val) { suggestionsList.style.display = 'none'; return; }
+            const matches = countryNamesList.filter(n => {
+                const ar = getArabicName(n).toLowerCase();
+                return n.toLowerCase().includes(val) || ar.includes(val);
+            }).slice(0, 8);
+            if (matches.length) {
+                matches.forEach(m => {
+                    const li = document.createElement('li');
+                    li.textContent = lang === 'ar' ? getArabicName(m) : m;
+                    li.addEventListener('click', () => {
+                        searchInput.value = '';
+                        suggestionsList.style.display = 'none';
+                        flyToCountry(m);
+                    });
+                    suggestionsList.appendChild(li);
+                });
+                suggestionsList.style.display = 'block';
+            } else {
+                suggestionsList.style.display = 'none';
+            }
+        });
+        searchInput.addEventListener('blur', () => setTimeout(() => suggestionsList.style.display = 'none', 200));
+    }
+
+    function flyToCountry(name) {
+        const feature = allCountryFeatures.find(f => f.properties?.name === name);
+        if (!feature) return;
+        const centroid = d3.geoCentroid(feature);
+        if (!centroid || isNaN(centroid[0])) return;
+        const {width, height} = getContainerDimensions();
+        const [px, py] = projection(centroid);
+        const targetX = width/2 - px * 3;
+        const targetY = height/2 - py * 3;
+        const transform = d3.zoomIdentity.translate(targetX, targetY).scale(3);
+        svg.transition().duration(800).call(zoomBehavior.transform, transform)
+            .on('end', () => {
+                highlightCountry(feature);
+            });
+    }
+
+    function highlightCountry(feature) {
+        if (!feature || !countryPaths) return;
+        countryPaths.classed('highlighted-country', false);
+        const path = countryPaths.filter(d => d === feature);
+        path.classed('highlighted-country', true);
+        if (highlightTimeout) clearTimeout(highlightTimeout);
+        highlightTimeout = setTimeout(() => {
+            countryPaths.classed('highlighted-country', false);
+        }, 3000);
+    }
+
+    function updateHash() {
+        const hash = new URLSearchParams();
+        hash.set('lang', lang); hash.set('mode', colorMode); hash.set('filter', currentReligionFilter);
+        hash.set('sect', sectMode ? '1' : '0'); hash.set('corridors', corridorsVisible ? '1' : '0');
+        hash.set('spots', densitySpotsMode ? '1' : '0'); hash.set('capitals', capitalsVisible ? '1' : '0');
+        hash.set('timezones', timezonesVisible ? '1' : '0');
+        hash.set('k', currentTransform.k.toFixed(2)); hash.set('x', currentTransform.x.toFixed(0)); hash.set('y', currentTransform.y.toFixed(0));
+        window.location.hash = hash.toString();
+    }
+
+    function loadFromHash() {
+        try {
+            const hash = new URLSearchParams(window.location.hash.substring(1));
+            if (hash.has('lang')) setLanguage(hash.get('lang'));
+            if (hash.has('mode')) setMode(hash.get('mode'));
+            if (hash.has('filter')) { currentReligionFilter = hash.get('filter'); religionButtons.forEach(b => b.classList.remove('active')); const btn = document.querySelector(`.religion-btn[data-religion="${currentReligionFilter}"]`); if (btn) btn.classList.add('active'); }
+            if (hash.get('sect') === '1' && !sectMode) toggleSect();
+            if (hash.get('corridors') === '1' && !corridorsVisible) toggleCorridors();
+            if (hash.get('spots') === '1' && !densitySpotsMode) toggleDensitySpots();
+            if (hash.get('capitals') === '1' && !capitalsVisible) toggleCapitals();
+            if (hash.get('timezones') === '1' && !timezonesVisible) toggleTimezones();
+            if (hash.has('k') && hash.has('x') && hash.has('y')) {
+                const k = +hash.get('k'), x = +hash.get('x'), y = +hash.get('y');
+                if (!isNaN(k) && !isNaN(x) && !isNaN(y)) svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(x, y).scale(k));
+            }
+        } catch(e) {}
+    }
+
+    function setupKeyboard() {
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT') return;
+            const code = e.code;
+            if (code === 'KeyR') setMode('religion');
+            else if (code === 'KeyT') setMode('terrain');
+            else if (code === 'KeyD') setMode('density');
+            else if (code === 'KeyP') setMode('precipitation');
+            else if (code === 'KeyH') setMode('temperature');
+            else if (code === 'KeyN') setMode('normal');
+            else if (code === 'KeyA') toggleCapitals();
+            else if (code === 'KeyZ') toggleTimezones();
+            else if (code === 'Digit1') { currentReligionFilter = 'all'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'Digit2') { currentReligionFilter = 'muslim'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'Digit3') { currentReligionFilter = 'christian'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'Digit4') { currentReligionFilter = 'hindu'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'Digit5') { currentReligionFilter = 'buddhist'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'Digit6') { currentReligionFilter = 'jewish'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'Digit7') { currentReligionFilter = 'other'; updateReligionButtons(); updateAllStyles(); }
+            else if (code === 'KeyS' && e.ctrlKey) { e.preventDefault(); toggleSect(); }
+            else if (code === 'KeyC' && e.ctrlKey) { e.preventDefault(); toggleCorridors(); }
+            else if (code === 'KeyB' && e.ctrlKey) { e.preventDefault(); toggleDensitySpots(); }
+            else if (code === 'Escape') { resetBtn.click(); }
+            else if (code === 'Equal' || code === 'NumpadAdd') { svg.transition().duration(300).call(zoomBehavior.scaleBy, 1.35); }
+            else if (code === 'Minus' || code === 'NumpadSubtract') { svg.transition().duration(300).call(zoomBehavior.scaleBy, 0.74); }
+        });
+    }
+
+    function updateReligionButtons() {
+        religionButtons.forEach(b => b.classList.remove('active'));
+        const btn = document.querySelector(`.religion-btn[data-religion="${currentReligionFilter}"]`);
+        if (btn) btn.classList.add('active');
+    }
+
+    function updateCoordinates(event) {
+        const rect = mapContainer.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const coords = projection.invert([x, y]);
+        if (coords && !isNaN(coords[0]) && !isNaN(coords[1])) {
+            const lon = coords[0].toFixed(2);
+            const lat = coords[1].toFixed(2);
+            coordinatesDisplay.textContent = t('coordinates', {lon, lat});
+        }
+    }
+
+    function drawPhysicalFeatures() {
+        gPhysical.selectAll('*').remove();
+        if (colorMode !== 'terrain') return;
+        mountainRanges.forEach(m => {
+            gPhysical.append('path').datum({type:'LineString', coordinates: m.coords}).attr('d', pathGen)
+                .attr('fill','none').attr('stroke','#d2b48c').attr('stroke-width',2.5).attr('vector-effect','non-scaling-stroke').attr('opacity',0.9)
+                .on('mouseenter',()=>{tooltip.innerHTML=`<strong>${m.name}</strong><br>${t('mountain')}`;tooltip.classList.add('visible');})
+                .on('mousemove',e=>{const r=mapContainer.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+16)+'px';tooltip.style.top=(e.clientY-r.top-50)+'px';})
+                .on('mouseleave',()=>tooltip.classList.remove('visible'));
+        });
+        rivers.forEach(r => {
+            gPhysical.append('path').datum({type:'LineString', coordinates: r.coords}).attr('d', pathGen)
+                .attr('fill','none').attr('stroke','#4fc3f7').attr('stroke-width',1.8).attr('vector-effect','non-scaling-stroke').attr('opacity',0.85)
+                .on('mouseenter',()=>{tooltip.innerHTML=`<strong>${r.name}</strong><br>${t('river')}`;tooltip.classList.add('visible');})
+                .on('mousemove',e=>{const r=mapContainer.getBoundingClientRect();tooltip.style.left=(e.clientX-r.left+16)+'px';tooltip.style.top=(e.clientY-r.top-50)+'px';})
+                .on('mouseleave',()=>tooltip.classList.remove('visible'));
+        });
+    }
+
+    function drawDensitySpots() {
+        gTemperature.selectAll('*').remove();
+        if (colorMode !== 'density' || !densitySpotsMode) return;
+        densitySpots.forEach(s => {
+            const [x, y] = projection(s.coords);
+            if (isNaN(x) || isNaN(y)) return;
+            const baseR = Math.max(1.5, Math.sqrt(s.density)/30);
+            const color = getSpotColor(s.density);
+            gTemperature.append('circle').attr('cx',x).attr('cy',y).attr('r',baseR*3.5).attr('fill',color).attr('opacity',0.15);
+            gTemperature.append('circle').attr('cx',x).attr('cy',y).attr('r',baseR*2.2).attr('fill',color).attr('opacity',0.4);
+            gTemperature.append('circle').attr('cx',x).attr('cy',y).attr('r',baseR).attr('fill',color).attr('opacity',0.95).attr('stroke','#fff').attr('stroke-width',0.8);
+            gTemperature.append('text').attr('x',x+baseR+2).attr('y',y-2).text(s.name).attr('fill','#fff').attr('font-size',7).attr('font-weight','bold');
+        });
+    }
+
+    function drawTimezones() {
+        gTimezones.selectAll('*').remove();
+        if (!timezonesVisible) return;
+        timezones.forEach(tz => {
+            const path = gTimezones.append('path')
+                .datum({type:'Polygon', coordinates: [tz.coords]})
+                .attr('d', pathGen)
+                .attr('fill', 'none')
+                .attr('stroke', 'rgba(255,255,255,0.2)')
+                .attr('stroke-width', 0.8)
+                .attr('stroke-dasharray', '4,4')
+                .attr('vector-effect', 'non-scaling-stroke');
+            path.on('mouseenter', () => {
+                const sign = tz.offset >= 0 ? '+' : '';
+                tooltip.innerHTML = `<strong>UTC${sign}${tz.offset}</strong><br>${t('timezone')}`;
+                tooltip.classList.add('visible');
+            })
+            .on('mousemove', e => {
+                const r = mapContainer.getBoundingClientRect();
+                tooltip.style.left = (e.clientX - r.left + 16) + 'px';
+                tooltip.style.top = (e.clientY - r.top - 50) + 'px';
+            })
+            .on('mouseleave', () => tooltip.classList.remove('visible'));
+        });
+    }
+
+    function drawGraticule() {
+        const g = d3.geoGraticule10(); gGraticule.selectAll('*').remove();
+        gGraticule.append('path').datum(g).attr('fill','none').attr('stroke','rgba(255,255,255,0.08)').attr('stroke-width',0.4).attr('d', pathGen);
+        gGraticule.append('path').datum({type:'Sphere'}).attr('fill','none').attr('stroke','rgba(255,255,255,0.15)').attr('stroke-width',1.2).attr('d', pathGen);
+    }
+
+    async function loadWorld() { const r = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'); const t = await r.json(); return topojson.feature(t, t.objects.countries).features; }
+
+    async function init() {
+        createSvg(); setupZoom(); drawGraticule(); setupSearch(); setupKeyboard();
+        const features = await loadWorld();
+        renderCountries(features);
+        applyLanguage();
+        loadFromHash();
+        updateHash();
+        mapContainer.addEventListener('mousemove', updateCoordinates);
+    }
+
+    // ========== ربط الأحداث ==========
+    modeButtons.forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+    sectToggle.addEventListener('click', toggleSect);
+    corridorsToggle.addEventListener('click', toggleCorridors);
+    densitySpotsToggle.addEventListener('click', toggleDensitySpots);
+    capitalsToggle.addEventListener('click', toggleCapitals);
+    timezonesToggle.addEventListener('click', toggleTimezones);
+    copyLinkBtn.addEventListener('click', copyCurrentLink);
+
+    const menuToggle = document.getElementById('menuToggle');
+    if (menuToggle) {
+        menuToggle.addEventListener('click', function() {
+            const bar = document.getElementById('controlsBar');
+            bar.classList.toggle('active');
+            this.classList.toggle('active');
+        });
+    }
+
+    langToggle.addEventListener('click', () => setLanguage(lang === 'ar' ? 'en' : 'ar'));
+
+    religionButtons.forEach(b => b.addEventListener('click', () => {
+        currentReligionFilter = b.dataset.religion;
+        religionButtons.forEach(bb => bb.classList.remove('active'));
+        b.classList.add('active');
+        updateAllStyles();
+    }));
+
+    zoomInBtn.addEventListener('click', () => { svg.transition().duration(300).call(zoomBehavior.scaleBy, 1.35); });
+    zoomOutBtn.addEventListener('click', () => { svg.transition().duration(300).call(zoomBehavior.scaleBy, 0.74); });
+    zoomResetBtn.addEventListener('click', resetZoom);
+
+    closePanelBtn.addEventListener('click', () => {
+        countryPanel.style.display = 'none';
+        selectedCountry = null;
+        compareCountry = null;
+        highlightSelectedCountry(null);
+    });
+    exportBtn.addEventListener('click', exportCountryData);
+
+    resetBtn.addEventListener('click', () => {
+        currentReligionFilter = 'all';
+        religionButtons.forEach(b => b.classList.remove('active'));
+        document.querySelector('.religion-btn[data-religion="all"]').classList.add('active');
+        setMode('religion');
+        if (sectMode) toggleSect();
+        if (corridorsVisible) toggleCorridors();
+        if (densitySpotsMode) toggleDensitySpots();
+        if (capitalsVisible) toggleCapitals();
+        if (timezonesVisible) toggleTimezones();
+        resetZoom();
+        selectedCountry = null;
+        compareCountry = null;
+        highlightSelectedCountry(null);
+    });
+
+    window.addEventListener('resize', () => {
+        const {width, height} = getContainerDimensions();
+        svgEl.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        svgEl.setAttribute('width', width);
+        svgEl.setAttribute('height', height);
+        projection = setupProjection(width, height);
+        pathGen = d3.geoPath(projection);
+        gOcean.select('rect').attr('width', width + 1000).attr('height', height + 1000);
+        drawGraticule();
+        if (allCountryFeatures.length) {
+            gCountries.selectAll('path').attr('d', pathGen);
+            if (countryLabelSelection) {
+                countryLabelSelection.remove();
+                countryLabelSelection = null;
+            }
+            drawCountryLabels(allCountryFeatures);
+        }
+        drawPhysicalFeatures();
+        drawCorridors();
+        drawDensitySpots();
+        drawCapitals();
+        drawTimezones();
+        svg.call(zoomBehavior.transform, currentTransform);
+    });
+
+    if ('serviceWorker' in navigator) {
+        const basePath = window.location.pathname.replace(/\/[^\/]*$/, '/');
+        navigator.serviceWorker.register(basePath + 'sw.js', { scope: basePath })
+            .then(reg => console.log('✅ Service Worker مسجل بنجاح:', reg))
+            .catch(err => console.error('❌ فشل تسجيل Service Worker:', err));
+    }
+
+    init().then(() => console.log('🦋 جميع التحسينات مطبقة بنجاح!'));
+})();
+</script>
+</body>
+</html><!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>خريطة Waterman Butterfly متعددة الطبقات</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-geo-projection@4/dist/d3-geo-projection.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+    
+    <script>
+        (function() {
+            var basePath = window.location.pathname.replace(/\/[^\/]*$/, '/');
+            var link = document.createElement('link');
+            link.rel = 'manifest';
+            link.href = basePath + 'manifest.json';
+            document.head.appendChild(link);
+            window.__BASE_PATH = basePath;
+        })();
+    </script>
+
+    <style>
+        :root {
+            --bg: #1a1d23;
+            --panel-bg: #21252b;
+            --text: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border: #333842;
+            --btn-bg: #2a2d35;
+            --btn-hover: #353a45;
+            --btn-active: #3a4458;
+            --shadow: 0 4px 24px rgba(0,0,0,0.5);
+            --transition: 0.3s ease;
+        }
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{background:var(--bg);font-family:'Segoe UI','Noto Sans Arabic',Tahoma,sans-serif;color:var(--text);overflow:hidden;height:100vh;width:100vw;display:flex;flex-direction:column;user-select:none;}
+        .header{background:var(--panel-bg);border-bottom:1px solid var(--border);padding:8px 12px;padding-top:calc(8px + env(safe-area-inset-top, 10px));display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:10;box-shadow:var(--shadow);gap:6px;flex-wrap:nowrap;}
+        .header .title-group{display:flex;align-items:center;gap:6px;flex-shrink:1;min-width:0;}
+        .header .logo-icon{font-size:20px;}
+        .header h1{font-size:0.9em;font-weight:700;background:linear-gradient(135deg,#e0e0e0,#b0c4de);-webkit-background-clip:text;-webkit-text-fill-color:transparent;white-space:nowrap;}
+        .header .subtitle{display:none;}
+        .control-group{display:flex;align-items:center;gap:2px;flex-wrap:wrap;}
+        .control-label{font-size:0.5em;color:var(--text-secondary);font-weight:600;text-transform:uppercase;white-space:nowrap;display:none;}
+        .btn{padding:4px 8px;border:1px solid var(--border);border-radius:14px;background:var(--btn-bg);color:var(--text);cursor:pointer;font-size:0.6em;font-weight:500;transition:var(--transition);white-space:nowrap;font-family:inherit;outline:none;}
+        .btn:hover{background:var(--btn-hover);border-color:#555;transform:translateY(-1px);box-shadow:0 3px 8px rgba(0,0,0,0.3);}
+        .btn.active{box-shadow:0 0 0 2px rgba(77,166,255,0.35);background:var(--btn-active);font-weight:700;color:#fff;}
+        .mode-btn.active{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,0.25);background:#3a4050;}
+        .toggle-on{background:#2a3a40;border-color:#4a7a6a;color:#c0e0d0;}
+        .divider{width:1px;height:16px;background:var(--border);margin:0 2px;border-radius:1px;flex-shrink:0;}
+        .map-container{flex:1;position:relative;cursor:grab;overflow:hidden;background:radial-gradient(ellipse at center, #1a2840 0%, #0d1520 100%);}
+        .map-container:active{cursor:grabbing;}
+        .map-container svg{display:block;width:100%;height:100%;}
+        .tooltip{position:absolute;pointer-events:none;background:rgba(20,24,32,0.95);border:1px solid rgba(255,255,255,0.2);border-radius:10px;padding:6px 10px;color:#fff;font-size:0.7em;box-shadow:0 8px 24px rgba(0,0,0,0.6);backdrop-filter:blur(10px);z-index:100;opacity:0;transition:opacity 0.15s;max-width:200px;text-align:center;}
+        .tooltip.visible{opacity:1;}
+        .legend{position:fixed;bottom:80px;left:16px;background:rgba(20,24,32,0.9);border:1px solid var(--border);border-radius:10px;padding:10px 14px;z-index:999;font-size:0.7em;display:flex;flex-direction:column;gap:4px;backdrop-filter:blur(8px);box-shadow:var(--shadow);max-height:50vh;overflow-y:auto;}
+        .legend-color{width:10px;height:10px;border-radius:2px;border:1px solid rgba(255,255,255,0.2);}
+        .legend-item{display:flex;align-items:center;gap:4px;white-space:nowrap;}
+        .info-overlay{display:none;}
+        .zoom-controls{position:fixed;bottom:80px;right:16px;display:flex;flex-direction:column;gap:6px;z-index:999;}
+        .zoom-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:rgba(20,24,32,0.9);color:#fff;cursor:pointer;font-size:0.9em;display:flex;align-items:center;justify-content:center;transition:var(--transition);backdrop-filter:blur(8px);box-shadow:var(--shadow);}
+        .zoom-btn:hover{background:rgba(40,46,58,0.95);transform:scale(1.08);}
+        .search-box{position:relative;display:flex;align-items:center;}
+        .search-box input{width:80px;padding:3px 8px;border-radius:14px;background:var(--btn-bg);color:var(--text);border:1px solid var(--border);font-size:0.6em;outline:none;font-family:inherit;}
+        .suggestions-list{position:absolute;top:100%;right:0;background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;max-height:150px;overflow-y:auto;z-index:50;list-style:none;display:none;width:140px;font-size:0.6em;}
+        .suggestions-list li{padding:4px 8px;cursor:pointer;color:var(--text);}
+        .suggestions-list li:hover{background:var(--btn-hover);}
+        .country-panel{position:absolute;top:30px;left:50%;transform:translateX(-50%);background:rgba(20,24,32,0.95);border:1px solid var(--border);border-radius:10px;padding:10px 14px;z-index:30;color:#fff;font-size:0.7em;backdrop-filter:blur(12px);box-shadow:var(--shadow);display:none;text-align:center;max-width:280px;min-width:180px;}
+        .country-panel .close-btn,.country-panel .export-btn{font-size:0.9em;padding:0 4px;}
+        .coordinates-display{display:none;}
+        .copy-notification{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(46,125,50,0.9);color:#fff;padding:4px 14px;border-radius:16px;font-size:0.7em;z-index:200;opacity:0;transition:opacity 0.3s ease;pointer-events:none;}
+        .copy-notification.show{opacity:1;}
+        @media(max-width:768px){
+            .header h1{font-size:0.8em;}
+            .btn{padding:3px 6px;font-size:0.55em;border-radius:10px;}
+            .control-label{display:none;}
+            .divider{margin:0 1px;}
+            .search-box input{width:60px;font-size:0.55em;}
+            .legend{font-size:0.5em;padding:4px 6px;}
+            .zoom-btn{width:24px;height:24px;font-size:0.8em;}
+            .country-panel{top:20px;max-width:200px;padding:8px 10px;}
+            .tooltip{font-size:0.6em;max-width:160px;padding:4px 8px;}
+        }
+
+        .menu-toggle {
+            position: fixed;
+            bottom: 90px;
+            right: 80px;
+            left: auto;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: var(--panel-bg);
+            border: 2px solid var(--border);
+            color: var(--text);
+            font-size: 1.8em;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 999;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+        }
+        .menu-toggle:hover {
+            background: var(--btn-hover);
+            transform: scale(1.05);
+        }
+        .menu-toggle.active {
+            background: var(--btn-active);
+            border-color: #fff;
+        }
+
+        .controls-bar {
+            position: fixed;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: fit-content;
+            max-width: 92vw;
+            background: rgba(20, 24, 32, 0.96);
+            backdrop-filter: blur(12px);
+            border-radius: 24px;
+            padding: 12px 16px;
+            z-index: 998;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.12);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        .controls-bar.active {
+            display: flex;
+        }
+        .controls-bar .row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            justify-content: center;
+        }
+        .controls-bar .row-label {
+            font-size: 0.6em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-left: 4px;
+            white-space: nowrap;
+        }
+        .controls-bar .btn {
+            padding: 6px 10px;
+            font-size: 0.7em;
+            border-radius: 20px;
+            min-height: 32px;
+        }
+        .controls-bar .control-group {
+            gap: 4px;
+        }
+        .controls-bar .search-box input {
+            width: 100px;
+            padding: 4px 10px;
+            font-size: 0.7em;
+        }
+        .controls-bar .control-label,
+        .controls-bar .divider {
+            display: none;
+        }
+
+        .country-label {
+            font-weight: 600;
+            fill: #e0e0e0;
+            text-anchor: middle;
+            dominant-baseline: central;
+            pointer-events: none;
+            text-shadow: 0 0 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6);
+        }
+        .capital-label {
+            font-size: 6px;
+            fill: #fff;
+            text-anchor: start;
+            dominant-baseline: central;
+            pointer-events: none;
+            text-shadow: 0 0 4px rgba(0,0,0,0.9);
+            font-weight: 500;
+        }
+        .corridor-dot {
+            fill: #ff9100;
+            stroke: #fff;
+            stroke-width: 0.5;
+            vector-effect: non-scaling-stroke;
+        }
+        .capital-dot {
+            fill: #ffd700;
+            stroke: #000;
+            stroke-width: 0.5;
+            vector-effect: non-scaling-stroke;
+        }
+        .capital-halo {
+            fill: #ffd700;
+            opacity: 0.25;
+            vector-effect: non-scaling-stroke;
+        }
+        .highlighted-country {
+            filter: drop-shadow(0 0 8px #ffd700);
+            stroke: #ffd700 !important;
+            stroke-width: 2 !important;
+        }
+        .corridor-line {
+            fill: none;
+            stroke-linecap: round;
+            vector-effect: non-scaling-stroke;
+        }
+        .corridor-glow {
+            fill: none;
+            stroke-linecap: round;
+            vector-effect: non-scaling-stroke;
+            filter: drop-shadow(0 0 6px currentColor);
+        }
+        #mapSvg {
+            will-change: transform;
+        }
+        .map-transform-group {
+            will-change: transform;
+        }
+    </style>
+</head>
+<body>
+<div class="header">
+    <div class="title-group">
+        <span class="logo-icon">🦋</span>
+        <div><h1>خريطة Waterman Butterfly</h1><span class="subtitle" style="font-size:0.7em;color:var(--text-secondary);">Interactive Multilayer Map</span></div>
+    </div>
+    <span style="font-size:0.7em;color:var(--text-secondary);">إسقاط ووترمان الفراشي</span>
+</div>
+
+<div class="map-container" id="mapContainer">
+    <svg id="mapSvg"></svg>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="legend" id="legend"></div>
+    <div class="info-overlay" id="infoOverlay"></div>
+    <div class="coordinates-display" id="coordinatesDisplay">خط الطول: — | خط العرض: —</div>
+    <div class="country-panel" id="countryPanel">
+        <button class="export-btn" id="exportBtn" title="تحميل">💾</button>
+        <button class="close-btn" id="closePanelBtn">✖</button>
+        <div id="panelContent"></div>
+    </div>
+
+    <div class="zoom-controls">
+        <button class="zoom-btn" id="zoomInBtn" title="تكبير">+</button>
+        <button class="zoom-btn" id="zoomOutBtn" title="تصغير">−</button>
+        <button class="zoom-btn" id="zoomResetBtn" title="إعادة">⌂</button>
+    </div>
+    <button class="menu-toggle" id="menuToggle" title="فتح القائمة">☰</button>
+
+    <div class="controls-bar" id="controlsBar">
+        <div class="row">
+            <span class="row-label" id="rowLangLabel">🌐 اللغة:</span>
+            <button class="btn" id="langToggle">English</button>
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="بحث..." autocomplete="off">
+                <ul class="suggestions-list" id="suggestionsList"></ul>
+            </div>
+            <button class="btn" id="copyLinkBtn" title="نسخ الرابط">📋</button>
+            <button class="btn" id="resetBtn">↺ إعادة</button>
+        </div>
+
+        <div class="row">
+            <span class="row-label" id="rowModeLabel">🎨 الوضع:</span>
+            <div class="control-group" id="modeButtons">
+                <button class="btn mode-btn active" data-mode="religion">🕌 دين</button>
+                <button class="btn mode-btn" data-mode="terrain">🏔️ تضاريس</button>
+                <button class="btn mode-btn" data-mode="density">👥 كثافة</button>
+                <button class="btn mode-btn" data-mode="precipitation">🌧️ أمطار</button>
+                <button class="btn mode-btn" data-mode="temperature">🌡️ حرارة</button>
+                <button class="btn mode-btn" data-mode="normal">🌍 طبيعي</button>
+            </div>
+        </div>
+
+        <div class="row">
+            <span class="row-label" id="rowFilterLabel">🎯 التقسيم:</span>
+            <div class="control-group" id="religionButtons">
+                <button class="btn religion-btn active" data-religion="all">الكل</button>
+                <button class="btn religion-btn" data-religion="muslim">مسلم</button>
+                <button class="btn religion-btn" data-religion="christian">مسيحي</button>
+                <button class="btn religion-btn" data-religion="hindu">هندوسي</button>
+                <button class="btn religion-btn" data-religion="buddhist">بوذي</button>
+                <button class="btn religion-btn" data-religion="jewish">يهودي</button>
+                <button class="btn religion-btn" data-religion="other">آخر</button>
+            </div>
+        </div>
+
+        <div class="row">
+            <span class="row-label" id="rowKeysLabel">🔑 المفاتيح:</span>
+            <button class="btn" id="sectToggle">☯️ الطوائف</button>
+            <button class="btn" id="corridorsToggle">⛵ الممرات</button>
+            <button class="btn" id="densitySpotsToggle">🔴 بؤر</button>
+            <button class="btn" id="capitalsToggle">🏙️ عواصم</button>
+            <button class="btn" id="timezonesToggle">🕐 مناطق</button>
+        </div>
+    </div>
+
+    <div class="copy-notification" id="copyNotification"></div>
+</div>
+
+<script>
+(function() {
+    const BASE = window.__BASE_PATH || './';
+    
+    const mapContainer = document.getElementById('mapContainer');
+    const svgEl = document.getElementById('mapSvg');
+    const tooltip = document.getElementById('tooltip');
+    const legendEl = document.getElementById('legend');
+    const infoOverlay = document.getElementById('infoOverlay');
+    const coordinatesDisplay = document.getElementById('coordinatesDisplay');
+    const copyNotification = document.getElementById('copyNotification');
+    const langToggle = document.getElementById('langToggle');
+    const modeButtons = document.querySelectorAll('.mode-btn');
+    const religionButtons = document.querySelectorAll('.religion-btn');
+    const sectToggle = document.getElementById('sectToggle');
+    const corridorsToggle = document.getElementById('corridorsToggle');
+    const densitySpotsToggle = document.getElementById('densitySpotsToggle');
+    const capitalsToggle = document.getElementById('capitalsToggle');
+    const timezonesToggle = document.getElementById('timezonesToggle');
+    const copyLinkBtn = document.getElementById('copyLinkBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const zoomInBtn = document.getElementById('zoomInBtn');
+    const zoomOutBtn = document.getElementById('zoomOutBtn');
+    const zoomResetBtn = document.getElementById('zoomResetBtn');
+    const searchInput = document.getElementById('searchInput');
+    const suggestionsList = document.getElementById('suggestionsList');
+    const countryPanel = document.getElementById('countryPanel');
+    const panelContent = document.getElementById('panelContent');
+    const closePanelBtn = document.getElementById('closePanelBtn');
+    const exportBtn = document.getElementById('exportBtn');
+
+    let currentReligionFilter = 'all';
+    let colorMode = 'religion';
+    let sectMode = false;
+    let corridorsVisible = false;
+    let densitySpotsMode = false;
+    let capitalsVisible = false;
+    let timezonesVisible = false;
+    let lang = 'ar';
+    let allCountryFeatures = [];
+    let countryPaths = null;
+    let selectedCountry = null;
+    let compareCountry = null;
+    let gCapitals, gTimezones;
+    let projection, pathGen;
+    let svg, gMap, gCountries, gGraticule, gOcean, gCorridors, gPhysical, gTemperature;
+    let currentTransform = d3.zoomIdentity;
+    let zoomBehavior;
+    let countryNamesList = [];
+    let highlightTimeout = null;
+    let countryLabelSelection = null;
+    let zoomRAF = null;
+
+    // ========== إحداثيات يدوية ==========
+    const labelPositions = {
+        'France': [2.5, 46.5],
+        'Spain': [-4.0, 40.0],
+        'Brazil': [-54.0, -15.0],
+        'Russia': [92.0, 62.0],
+        'Australia': [133.0, -25.0],
+        'Canada': [-100.0, 55.0],
+        'China': [105.0, 35.0],
+        'United States': [-100.0, 40.0],
+        'India': [78.0, 22.0],
+        'Argentina': [-64.0, -35.0],
+        'Chile': [-71.0, -35.0],
+        'Mexico': [-102.0, 23.0],
+        'Indonesia': [120.0, -5.0],
+        'DR Congo': [23.0, -3.0],
+        'Congo': [15.0, -2.0],
+        'South Africa': [24.0, -29.0],
+        'Germany': [10.0, 51.0],
+        'Italy': [12.0, 42.5],
+        'United Kingdom': [-3.0, 54.0],
+        'Japan': [137.0, 37.0],
+        'Turkey': [35.0, 39.0],
+        'Egypt': [29.0, 26.5],
+        'Saudi Arabia': [45.0, 24.0],
+        'Iran': [54.0, 32.0],
+        'Pakistan': [68.0, 30.0],
+        'Afghanistan': [66.0, 33.0],
+        'Venezuela': [-66.0, 8.0],
+        'Colombia': [-74.0, 4.0],
+        'Peru': [-76.0, -10.0],
+        'Bolivia': [-66.0, -17.0],
+        'Paraguay': [-58.0, -23.0],
+        'Uruguay': [-56.0, -33.0],
+        'Ecuador': [-78.0, -1.0],
+        'Guyana': [-59.0, 5.0],
+        'Suriname': [-56.0, 4.0],
+        'French Guiana': [-53.0, 3.5],
+        'Greenland': [-42.0, 72.0],
+        'Iceland': [-18.0, 65.0],
+        'Norway': [10.0, 62.0],
+        'Sweden': [15.0, 62.0],
+        'Finland': [26.0, 64.0],
+        'Poland': [19.0, 52.0],
+        'Ukraine': [31.0, 49.0],
+        'Belarus': [28.0, 53.0],
+        'Romania': [25.0, 46.0],
+        'Bulgaria': [25.0, 43.0],
+        'Greece': [22.0, 38.0],
+        'Albania': [20.0, 41.0],
+        'Austria': [14.0, 47.5],
+        'Switzerland': [8.0, 47.0],
+        'Netherlands': [5.5, 52.5],
+        'Belgium': [4.5, 50.5],
+        'Portugal': [-8.0, 39.5],
+        'Morocco': [-7.0, 31.0],
+        'Algeria': [2.0, 28.0],
+        'Tunisia': [10.0, 34.0],
+        'Libya': [17.0, 27.0],
+        'Mauritania': [-10.0, 20.0],
+        'Senegal': [-14.0, 14.0],
+        'Mali': [-3.0, 17.0],
+        'Niger': [8.0, 17.0],
+        'Nigeria': [8.0, 9.0],
+        'Cameroon': [12.0, 6.0],
+        'Gabon': [11.0, -0.5],
+        'Angola': [17.0, -12.0],
+        'Zambia': [28.0, -15.0],
+        'Zimbabwe': [30.0, -19.0],
+        'Mozambique': [35.0, -17.0],
+        'Madagascar': [47.0, -19.0],
+        'Kenya': [38.0, 0.0],
+        'Tanzania': [35.0, -6.0],
+        'Uganda': [32.0, 1.0],
+        'Rwanda': [30.0, -2.0],
+        'Burundi': [29.5, -3.5],
+        'South Sudan': [31.0, 6.0],
+        'Sudan': [30.0, 16.0],
+        'Ethiopia': [40.0, 9.0],
+        'Somalia': [46.0, 6.0],
+        'Somaliland': [46.0, 9.0],
+        'Yemen': [48.0, 15.5],
+        'Oman': [56.0, 21.0],
+        'UAE': [54.0, 24.0],
+        'Qatar': [51.5, 25.5],
+        'Bahrain': [50.5, 26.0],
+        'Kuwait': [47.5, 29.5],
+        'Iraq': [44.0, 33.0],
+        'Jordan': [36.0, 31.0],
+        'Lebanon': [35.5, 33.8],
+        'Syria': [38.0, 35.0],
+        'Israel': [35.0, 31.5],
+        'Palestine': [35.3, 32.0],
+        'Armenia': [44.5, 40.2],
+        'Azerbaijan': [48.0, 40.5],
+        'Georgia': [43.5, 42.0],
+        'Kazakhstan': [67.0, 48.0],
+        'Uzbekistan': [64.0, 41.0],
+        'Turkmenistan': [58.0, 39.0],
+        'Kyrgyzstan': [75.0, 41.0],
+        'Tajikistan': [71.0, 38.5],
+        'Mongolia': [104.0, 46.0],
+        'North Korea': [127.0, 40.0],
+        'South Korea': [128.0, 36.0],
+        'Taiwan': [121.0, 23.5],
+        'Philippines': [122.0, 12.0],
+        'Malaysia': [102.0, 3.0],
+        'Singapore': [103.8, 1.3],
+        'Brunei': [114.5, 4.5],
+        'Vietnam': [106.0, 16.0],
+        'Cambodia': [105.0, 12.0],
+        'Laos': [103.0, 18.0],
+        'Thailand': [101.0, 14.0],
+        'Myanmar': [96.0, 20.0],
+        'Bangladesh': [90.0, 24.0],
+        'Nepal': [84.0, 28.0],
+        'Bhutan': [90.5, 27.5],
+        'Sri Lanka': [80.7, 7.9],
+        'Maldives': [73.0, 3.0],
+        'New Zealand': [172.0, -42.0],
+        'Papua New Guinea': [143.0, -6.0],
+        'Fiji': [178.0, -17.0],
+        'Solomon Islands': [160.0, -9.0],
+        'Vanuatu': [167.0, -16.0],
+        'Samoa': [-172.0, -13.5],
+        'Tonga': [-175.0, -21.0]
+    };
+
+    // ========== بيانات إضافية: القارات وأنظمة الحكم ==========
+    const continentByCountry = {
+        'Afghanistan':'Asia','Albania':'Europe','Algeria':'Africa','Angola':'Africa','Argentina':'South America',
+        'Armenia':'Asia','Australia':'Oceania','Austria':'Europe','Azerbaijan':'Asia','Bahrain':'Asia',
+        'Bangladesh':'Asia','Belarus':'Europe','Belgium':'Europe','Belize':'North America','Benin':'Africa',
+        'Bhutan':'Asia','Bolivia':'South America','Bosnia':'Europe','Botswana':'Africa','Brazil':'South America',
+        'Brunei':'Asia','Bulgaria':'Europe','Burkina Faso':'Africa','Burundi':'Africa','Cambodia':'Asia',
+        'Cameroon':'Africa','Canada':'North America','Cape Verde':'Africa','Central African Republic':'Africa',
+        'Chad':'Africa','Chile':'South America','China':'Asia','Colombia':'South America','Comoros':'Africa',
+        'Congo':'Africa','Costa Rica':'North America','Croatia':'Europe','Cuba':'North America','Cyprus':'Asia',
+        'Czech Republic':'Europe','Czechia':'Europe','DR Congo':'Africa','Denmark':'Europe','Djibouti':'Africa',
+        'Dominican Republic':'North America','Ecuador':'South America','Egypt':'Africa','El Salvador':'North America',
+        'Equatorial Guinea':'Africa','Eritrea':'Africa','Estonia':'Europe','Eswatini':'Africa','Ethiopia':'Africa',
+        'Fiji':'Oceania','Finland':'Europe','France':'Europe','Gabon':'Africa','Gambia':'Africa','Georgia':'Asia',
+        'Germany':'Europe','Ghana':'Africa','Greece':'Europe','Greenland':'North America','Guatemala':'North America',
+        'Guinea':'Africa','Guinea-Bissau':'Africa','Guyana':'South America','Haiti':'North America','Honduras':'North America',
+        'Hungary':'Europe','Iceland':'Europe','India':'Asia','Indonesia':'Asia','Iran':'Asia','Iraq':'Asia',
+        'Ireland':'Europe','Israel':'Asia','Italy':'Europe','Jamaica':'North America','Japan':'Asia','Jordan':'Asia',
+        'Kazakhstan':'Asia','Kenya':'Africa','Kuwait':'Asia','Kyrgyzstan':'Asia','Laos':'Asia','Latvia':'Europe',
+        'Lebanon':'Asia','Lesotho':'Africa','Liberia':'Africa','Libya':'Africa','Lithuania':'Europe',
+        'Luxembourg':'Europe','Madagascar':'Africa','Malawi':'Africa','Malaysia':'Asia','Maldives':'Asia',
+        'Mali':'Africa','Malta':'Europe','Mauritania':'Africa','Mauritius':'Africa','Mexico':'North America',
+        'Moldova':'Europe','Mongolia':'Asia','Montenegro':'Europe','Morocco':'Africa','Mozambique':'Africa',
+        'Myanmar':'Asia','Namibia':'Africa','Nepal':'Asia','Netherlands':'Europe','New Zealand':'Oceania',
+        'Nicaragua':'North America','Niger':'Africa','Nigeria':'Africa','North Korea':'Asia','North Macedonia':'Europe',
+        'Norway':'Europe','Oman':'Asia','Pakistan':'Asia','Palestine':'Asia','Panama':'North America',
+        'Papua New Guinea':'Oceania','Paraguay':'South America','Peru':'South America','Philippines':'Asia',
+        'Poland':'Europe','Portugal':'Europe','Qatar':'Asia','Romania':'Europe','Russia':'Europe','Rwanda':'Africa',
+        'Saudi Arabia':'Asia','Senegal':'Africa','Serbia':'Europe','Sierra Leone':'Africa','Singapore':'Asia',
+        'Slovakia':'Europe','Slovenia':'Europe','Somalia':'Africa','Somaliland':'Africa','South Africa':'Africa','South Korea':'Asia',
+        'South Sudan':'Africa','Spain':'Europe','Sri Lanka':'Asia','Sudan':'Africa','Suriname':'South America',
+        'Sweden':'Europe','Switzerland':'Europe','Syria':'Asia','Taiwan':'Asia','Tajikistan':'Asia',
+        'Tanzania':'Africa','Thailand':'Asia','Timor-Leste':'Asia','Togo':'Africa','Tonga':'Oceania',
+        'Trinidad and Tobago':'North America','Tunisia':'Africa','Turkey':'Asia','Turkmenistan':'Asia',
+        'Uganda':'Africa','Ukraine':'Europe','United Arab Emirates':'Asia','United Kingdom':'Europe',
+        'United States':'North America','Uruguay':'South America','Uzbekistan':'Asia','Vanuatu':'Oceania',
+        'Venezuela':'South America','Vietnam':'Asia','Yemen':'Asia','Zambia':'Africa','Zimbabwe':'Africa',
+        'Kosovo':'Europe','Western Sahara':'Africa','W. Sahara':'Africa','Puerto Rico':'North America',
+        'Samoa':'Oceania','Solomon Islands':'Oceania','Seychelles':'Africa','São Tomé and Príncipe':'Africa',
+        'Saint Lucia':'North America','Grenada':'North America','Barbados':'North America','Bahamas':'North America',
+        'Côte d\'Ivoire':'Africa','Ivory Coast':'Africa','Central African Rep.':'Africa','Dominican Rep.':'North America',
+        'Bosnia and Herz.':'Europe','Eq. Guinea':'Africa','S. Sudan':'Africa','Solomon Is.':'Oceania',
+        'United States of America':'North America','Republic of the Congo':'Africa','Democratic Republic of the Congo':'Africa',
+        'Dem. Rep. Congo':'Africa'
+    };
+
+    const governmentByCountry = {
+        'Afghanistan':'Islamic Emirate','Albania':'Parliamentary Republic','Algeria':'Semi-Presidential Republic',
+        'Angola':'Presidential Republic','Argentina':'Presidential Republic','Armenia':'Parliamentary Republic',
+        'Australia':'Parliamentary Monarchy','Austria':'Federal Parliamentary Republic','Azerbaijan':'Presidential Republic',
+        'Bahrain':'Constitutional Monarchy','Bangladesh':'Parliamentary Republic','Belarus':'Presidential Republic',
+        'Belgium':'Parliamentary Monarchy','Belize':'Parliamentary Monarchy','Benin':'Presidential Republic',
+        'Bhutan':'Constitutional Monarchy','Bolivia':'Presidential Republic','Bosnia':'Parliamentary Republic',
+        'Botswana':'Parliamentary Republic','Brazil':'Federal Presidential Republic','Brunei':'Absolute Monarchy',
+        'Bulgaria':'Parliamentary Republic','Burkina Faso':'Semi-Presidential Republic','Burundi':'Presidential Republic',
+        'Cambodia':'Constitutional Monarchy','Cameroon':'Presidential Republic','Canada':'Parliamentary Monarchy',
+        'Cape Verde':'Semi-Presidential Republic','Central African Republic':'Presidential Republic',
+        'Chad':'Presidential Republic','Chile':'Presidential Republic','China':'One-Party Socialist Republic',
+        'Colombia':'Presidential Republic','Comoros':'Federal Presidential Republic','Congo':'Presidential Republic',
+        'Costa Rica':'Presidential Republic','Croatia':'Parliamentary Republic','Cuba':'One-Party Socialist Republic',
+        'Cyprus':'Presidential Republic','Czech Republic':'Parliamentary Republic','DR Congo':'Semi-Presidential Republic',
+        'Denmark':'Parliamentary Monarchy','Djibouti':'Presidential Republic','Dominican Republic':'Presidential Republic',
+        'Ecuador':'Presidential Republic','Egypt':'Semi-Presidential Republic','El Salvador':'Presidential Republic',
+        'Equatorial Guinea':'Presidential Republic','Eritrea':'One-Party Republic','Estonia':'Parliamentary Republic',
+        'Eswatini':'Absolute Monarchy','Ethiopia':'Federal Parliamentary Republic','Fiji':'Parliamentary Republic',
+        'Finland':'Parliamentary Republic','France':'Semi-Presidential Republic','Gabon':'Presidential Republic',
+        'Gambia':'Presidential Republic','Georgia':'Semi-Presidential Republic','Germany':'Federal Parliamentary Republic',
+        'Ghana':'Presidential Republic','Greece':'Parliamentary Republic','Greenland':'Parliamentary Monarchy (Denmark)',
+        'Guatemala':'Presidential Republic','Guinea':'Presidential Republic','Guinea-Bissau':'Semi-Presidential Republic',
+        'Guyana':'Presidential Republic','Haiti':'Semi-Presidential Republic','Honduras':'Presidential Republic',
+        'Hungary':'Parliamentary Republic','Iceland':'Parliamentary Republic','India':'Federal Parliamentary Republic',
+        'Indonesia':'Presidential Republic','Iran':'Islamic Republic','Iraq':'Federal Parliamentary Republic',
+        'Ireland':'Parliamentary Republic','Israel':'Parliamentary Republic','Italy':'Parliamentary Republic',
+        'Jamaica':'Parliamentary Monarchy','Japan':'Parliamentary Monarchy','Jordan':'Constitutional Monarchy',
+        'Kazakhstan':'Presidential Republic','Kenya':'Presidential Republic','Kuwait':'Constitutional Monarchy',
+        'Kyrgyzstan':'Parliamentary Republic','Laos':'One-Party Socialist Republic','Latvia':'Parliamentary Republic',
+        'Lebanon':'Parliamentary Republic','Lesotho':'Constitutional Monarchy','Liberia':'Presidential Republic',
+        'Libya':'Transitional Government','Lithuania':'Parliamentary Republic','Luxembourg':'Parliamentary Monarchy',
+        'Madagascar':'Semi-Presidential Republic','Malawi':'Presidential Republic','Malaysia':'Parliamentary Monarchy',
+        'Maldives':'Presidential Republic','Mali':'Semi-Presidential Republic','Malta':'Parliamentary Republic',
+        'Mauritania':'Semi-Presidential Republic','Mauritius':'Parliamentary Republic','Mexico':'Federal Presidential Republic',
+        'Moldova':'Parliamentary Republic','Mongolia':'Semi-Presidential Republic','Montenegro':'Parliamentary Republic',
+        'Morocco':'Constitutional Monarchy','Mozambique':'Presidential Republic','Myanmar':'Military Junta',
+        'Namibia':'Presidential Republic','Nepal':'Federal Parliamentary Republic','Netherlands':'Parliamentary Monarchy',
+        'New Zealand':'Parliamentary Monarchy','Nicaragua':'Presidential Republic','Niger':'Semi-Presidential Republic',
+        'Nigeria':'Federal Presidential Republic','North Korea':'One-Party Socialist Republic',
+        'North Macedonia':'Parliamentary Republic','Norway':'Parliamentary Monarchy','Oman':'Absolute Monarchy',
+        'Pakistan':'Federal Parliamentary Republic','Palestine':'Semi-Presidential Republic',
+        'Panama':'Presidential Republic','Papua New Guinea':'Parliamentary Monarchy','Paraguay':'Presidential Republic',
+        'Peru':'Presidential Republic','Philippines':'Presidential Republic','Poland':'Parliamentary Republic',
+        'Portugal':'Semi-Presidential Republic','Qatar':'Absolute Monarchy','Romania':'Semi-Presidential Republic',
+        'Russia':'Semi-Presidential Republic','Rwanda':'Presidential Republic','Saudi Arabia':'Absolute Monarchy',
+        'Senegal':'Semi-Presidential Republic','Serbia':'Parliamentary Republic','Sierra Leone':'Presidential Republic',
+        'Singapore':'Parliamentary Republic','Slovakia':'Parliamentary Republic','Slovenia':'Parliamentary Republic',
+        'Somalia':'Federal Parliamentary Republic','Somaliland':'Republic','South Africa':'Parliamentary Republic','South Korea':'Presidential Republic',
+        'South Sudan':'Presidential Republic','Spain':'Parliamentary Monarchy','Sri Lanka':'Semi-Presidential Republic',
+        'Sudan':'Transitional Government','Suriname':'Presidential Republic','Sweden':'Parliamentary Monarchy',
+        'Switzerland':'Federal Parliamentary Republic','Syria':'Presidential Republic','Taiwan':'Semi-Presidential Republic',
+        'Tajikistan':'Presidential Republic','Tanzania':'Presidential Republic','Thailand':'Constitutional Monarchy',
+        'Timor-Leste':'Semi-Presidential Republic','Togo':'Presidential Republic','Tonga':'Constitutional Monarchy',
+        'Trinidad and Tobago':'Parliamentary Republic','Tunisia':'Semi-Presidential Republic','Turkey':'Presidential Republic',
+        'Turkmenistan':'Presidential Republic','Uganda':'Presidential Republic','Ukraine':'Semi-Presidential Republic',
+        'United Arab Emirates':'Federal Absolute Monarchy','United Kingdom':'Parliamentary Monarchy',
+        'United States':'Federal Presidential Republic','Uruguay':'Presidential Republic','Uzbekistan':'Presidential Republic',
+        'Vanuatu':'Parliamentary Republic','Venezuela':'Federal Presidential Republic','Vietnam':'One-Party Socialist Republic',
+        'Yemen':'Presidential Republic','Zambia':'Presidential Republic','Zimbabwe':'Presidential Republic',
+        'Kosovo':'Parliamentary Republic','Western Sahara':'Disputed','W. Sahara':'Disputed',
+        'Puerto Rico':'Territory (US)','Samoa':'Parliamentary Republic','Solomon Islands':'Parliamentary Monarchy',
+        'Seychelles':'Presidential Republic','São Tomé and Príncipe':'Semi-Presidential Republic',
+        'Saint Lucia':'Parliamentary Monarchy','Grenada':'Parliamentary Monarchy','Barbados':'Parliamentary Republic',
+        'Bahamas':'Parliamentary Monarchy','Côte d\'Ivoire':'Presidential Republic','Ivory Coast':'Presidential Republic',
+        'Central African Rep.':'Presidential Republic','Dominican Rep.':'Presidential Republic',
+        'Bosnia and Herz.':'Parliamentary Republic','Eq. Guinea':'Presidential Republic','S. Sudan':'Presidential Republic',
+        'Solomon Is.':'Parliamentary Monarchy','United States of America':'Federal Presidential Republic',
+        'Republic of the Congo':'Presidential Republic','Democratic Republic of the Congo':'Semi-Presidential Republic',
+        'Dem. Rep. Congo':'Semi-Presidential Republic'
+    };
+
+    const continentArabic = {
+        'Asia':'آسيا','Africa':'أفريقيا','Europe':'أوروبا','North America':'أمريكا الشمالية',
+        'South America':'أمريكا الجنوبية','Oceania':'أوقيانوسيا','Antarctica':'القارة القطبية الجنوبية'
+    };
+    const governmentArabic = {
+        'Absolute Monarchy':'ملكية مطلقة','Constitutional Monarchy':'ملكية دستورية','Parliamentary Monarchy':'ملكية برلمانية',
+        'Presidential Republic':'جمهورية رئاسية','Parliamentary Republic':'جمهورية برلمانية','Semi-Presidential Republic':'جمهورية شبه رئاسية',
+        'Federal Presidential Republic':'جمهورية اتحادية رئاسية','Federal Parliamentary Republic':'جمهورية اتحادية برلمانية',
+        'Islamic Republic':'جمهورية إسلامية','Islamic Emirate':'إمارة إسلامية','Emirate':'إمارة',
+        'One-Party Socialist Republic':'جمهورية اشتراكية أحادية الحزب','One-Party Republic':'جمهورية أحادية الحزب',
+        'Military Junta':'مجلس عسكري','Transitional Government':'حكومة انتقالية','Disputed':'منطقة متنازع عليها',
+        'Territory (US)':'إقليم (أمريكي)','Unknown':'غير معروف','Parliamentary Republic (Denmark)':'جمهورية برلمانية (الدنمارك)',
+        'Republic':'جمهورية'
+    };
+
+    function getContinent(name) {
+        if (!name) return 'Unknown';
+        const clean = getCleanName(name);
+        if (continentByCountry[clean]) return continentByCountry[clean];
+        if (continentByCountry[name]) return continentByCountry[name];
+        const feature = allCountryFeatures.find(f => f.properties?.name === name || getCleanName(f.properties?.name) === clean);
+        if (feature && feature.geometry) {
+            const centroid = d3.geoCentroid(feature);
+            if (centroid && !isNaN(centroid[0])) {
+                const lat = centroid[1], lon = centroid[0];
+                if (lat > 60) return 'Europe';
+                if (lat < -50) return 'Antarctica';
+                if (lon > -25 && lon < 50 && lat > -35 && lat < 37) return 'Africa';
+                if (lon > -130 && lon < -60 && lat > 20) return 'North America';
+                if (lon > -85 && lon < -30 && lat < 10) return 'South America';
+                if (lon > 70 && lon < 150 && lat > 10) return 'Asia';
+                if (lon > 110 && lon < 180 && lat < -10) return 'Oceania';
+                if (lon > -10 && lon < 40 && lat > 35) return 'Europe';
+                return 'Unknown';
+            }
+        }
+        return 'Unknown';
+    }
+
+    function getGovernment(name) {
+        if (!name) return 'Unknown';
+        const clean = getCleanName(name);
+        if (governmentByCountry[clean]) return governmentByCountry[clean];
+        if (governmentByCountry[name]) return governmentByCountry[name];
+        return 'Unknown';
+    }
+
+    // ========== البيانات الحالية ==========
+    const i18n = {
+        ar: {
+            langLabel:'🌐 اللغة:',langButton:'العربية',modeLabel:'🎨 الوضع:',mode_religion:'🕌 دين',mode_terrain:'🏔️ تضاريس',mode_density:'👥 كثافة',mode_precipitation:'🌧️ أمطار',mode_temperature:'🌡️ حرارة',mode_normal:'🌍 طبيعي',
+            filterLabel:'🎯 فلتر:',religion_all:'الكل',religion_muslim:'مسلم',religion_christian:'مسيحي',religion_hindu:'هندوسي',religion_buddhist:'بوذي',religion_jewish:'يهودي',religion_other:'آخر',
+            sectToggle:'☯️ الطوائف',corridorsToggle:'⛵ الممرات',densitySpotsToggle:'🔴 بؤر',capitalsToggle:'🏙️ عواصم',timezonesToggle:'🕐 مناطق',copyLinkBtn:'📋 نسخ الرابط',resetBtn:'↺ إعادة',
+            infoOverlay:'🦋 Waterman Butterfly | تكبير: {zoom}x | اسحب للتحريك | مرر للتكبير',
+            terrainLegend:'🏔️ التضاريس',densityLegend:'👥 الكثافة',precipitationLegend:'🌧️ الهطول (مم/سنة)',temperatureLegend:'🌡️ الحرارة السنوية',
+            religionLegend:'🎯 الديانات',normalLegend:'🌍 طبيعي',corridorsOn:'⛵ الممرات',spotsOn:'🔴 بؤر كثافة',capitalsOn:'🏙️ العواصم',timezonesOn:'🕐 المناطق الزمنية',
+            tooltipReligion:'الدين',tooltipDenom:'الطائفة',tooltipElevation:'الارتفاع',tooltipDensity:'الكثافة',tooltipPrecipitation:'الهطول',
+            seaRoute:'ممر بحري',landRoute:'طريق بري',mountain:'سلسلة جبلية',river:'نهر',capital:'عاصمة',
+            timezone:'المنطقة الزمنية',localTime:'التوقيت المحلي الآن',
+            temperature:'الحرارة',celsius:'°م',unknown:'غير معروف',
+            elevationUnit:'م',densityUnit:'نسمة/كم²',precipitationUnit:'مم',
+            zoomIn:'تكبير',zoomOut:'تصغير',zoomReset:'إعادة',
+            searchPlaceholder:'بحث عن دولة...',
+            populationTitle:'عدد السكان (تقدير 2026)',areaTitle:'المساحة',densityTitle:'الكثافة السكانية',languageTitle:'اللغة',
+            km2:'كم²',million:'مليون',
+            compareTitle:'مقارنة مع',closeCompare:'إلغاء المقارنة',
+            exportLabel:'تحميل',exportFilename:'معلومات_الدولة',
+            dstActive:'صيفي',dstInactive:'شتوي',dstSuffix:'(UTC{std} شتوي، UTC{dst} صيفي)',
+            coordinates:'خط الطول: {lon} | خط العرض: {lat}',
+            copySuccess:'تم نسخ الرابط!',
+            copyFail:'فشل النسخ',
+            rowLangLabel:'🌐 اللغة:',
+            rowModeLabel:'🎨 الوضع:',
+            rowFilterLabel:'🎯 التقسيم:',
+            rowKeysLabel:'🔑 المفاتيح:',
+            continent:'القارة',
+            government:'نظام الحكم'
+        },
+        en: {
+            langLabel:'🌐 Language:',langButton:'English',modeLabel:'🎨 Mode:',mode_religion:'🕌 Religion',mode_terrain:'🏔️ Terrain',mode_density:'👥 Density',mode_precipitation:'🌧️ Precipitation',mode_temperature:'🌡️ Temperature',mode_normal:'🌍 Normal',
+            filterLabel:'🎯 Filter:',religion_all:'All',religion_muslim:'Muslim',religion_christian:'Christian',religion_hindu:'Hindu',religion_buddhist:'Buddhist',religion_jewish:'Jewish',religion_other:'Other',
+            sectToggle:'☯️ Sects',corridorsToggle:'⛵ Corridors',densitySpotsToggle:'🔴 Hotspots',capitalsToggle:'🏙️ Capitals',timezonesToggle:'🕐 Time Zones',copyLinkBtn:'📋 Copy Link',resetBtn:'↺ Reset',
+            infoOverlay:'🦋 Waterman Butterfly | Zoom: {zoom}x | Drag to pan | Scroll to zoom',
+            terrainLegend:'🏔️ Terrain',densityLegend:'👥 Density',precipitationLegend:'🌧️ Precipitation (mm/year)',temperatureLegend:'🌡️ Annual Temp',
+            religionLegend:'🎯 Religions',normalLegend:'🌍 Normal',corridorsOn:'⛵ Corridors',spotsOn:'🔴 Density spots',capitalsOn:'🏙️ Capitals',timezonesOn:'🕐 Time Zones',
+            tooltipReligion:'Religion',tooltipDenom:'Denomination',tooltipElevation:'Elevation',tooltipDensity:'Density',tooltipPrecipitation:'Precipitation',
+            seaRoute:'Sea route',landRoute:'Land route',mountain:'Mountain range',river:'River',capital:'Capital',
+            timezone:'Time Zone',localTime:'Current Local Time',
+            temperature:'Temperature',celsius:'°C',unknown:'Unknown',
+            elevationUnit:'m',densityUnit:'people/km²',precipitationUnit:'mm',
+            zoomIn:'Zoom In',zoomOut:'Zoom Out',zoomReset:'Reset Zoom',
+            searchPlaceholder:'Search country...',
+            populationTitle:'Population (2026 est.)',areaTitle:'Area',densityTitle:'Population density',languageTitle:'Language',
+            km2:'km²',million:'million',
+            compareTitle:'Compare with',closeCompare:'Cancel compare',
+            exportLabel:'Export',exportFilename:'country_info',
+            dstActive:'Summer',dstInactive:'Winter',dstSuffix:'(UTC{std} winter, UTC{dst} summer)',
+            coordinates:'Lon: {lon} | Lat: {lat}',
+            copySuccess:'Link copied!',
+            copyFail:'Copy failed',
+            rowLangLabel:'🌐 Language:',
+            rowModeLabel:'🎨 Mode:',
+            rowFilterLabel:'🎯 Division:',
+            rowKeysLabel:'🔑 Keys:',
+            continent:'Continent',
+            government:'Government'
+        }
+    };
+    function t(key,params={}){let s=i18n[lang]?.[key]||i18n.en[key]||key;for(let[k,v]of Object.entries(params))s=s.replace(`{${k}}`,v);return s;}
+
+    const dstCountries = new Set([
+        'Albania','Andorra','Austria','Belgium','Bosnia and Herzegovina','Bosnia and Herz.','Bulgaria','Croatia','Cyprus','Czech Republic','Czechia',
+        'Denmark','Estonia','Finland','France','Germany','Greece','Hungary','Iceland','Ireland','Italy','Latvia','Liechtenstein',
+        'Lithuania','Luxembourg','Malta','Moldova','Monaco','Montenegro','Netherlands','North Macedonia','Norway','Poland','Portugal',
+        'Romania','San Marino','Serbia','Slovakia','Slovenia','Spain','Sweden','Switzerland','Ukraine','United Kingdom','Vatican City',
+        'United States','Canada','Mexico','Bahamas','Bermuda','Cuba','Haiti','Turks and Caicos',
+        'Australia','New Zealand','Fiji','Samoa','Tonga','Vanuatu','New Caledonia',
+        'Chile','Paraguay','Uruguay','Brazil','Bolivia',
+        'Egypt','Israel','Jordan','Lebanon','Syria','Iran','Morocco','Western Sahara','W. Sahara',
+        'Greenland','Puerto Rico'
+    ]);
+
+    function isDSTActive(countryName, utcOffset) {
+        if (!dstCountries.has(countryName)) return false;
+        const now = new Date();
+        const month = now.getUTCMonth();
+        const isNorth = utcOffset > -5;
+        if (isNorth) { return month >= 2 && month <= 9; }
+        else { return month <= 2 || month >= 9; }
+    }
+
+    const countryInfo = {
+        'Afghanistan':{capital_ar:'كابول',capital_en:'Kabul',capital_coords:[69.2,34.5],population_2026:42.5,area:652230,lang_ar:'الدرية / البشتو',lang_en:'Dari / Pashto'},
+        'Albania':{capital_ar:'تيرانا',capital_en:'Tirana',capital_coords:[19.8,41.3],population_2026:2.75,area:28748,lang_ar:'الألبانية',lang_en:'Albanian'},
+        'Algeria':{capital_ar:'الجزائر',capital_en:'Algiers',capital_coords:[3.1,36.8],population_2026:46.5,area:2381741,lang_ar:'العربية / الأمازيغية',lang_en:'Arabic / Berber'},
+        'Angola':{capital_ar:'لواندا',capital_en:'Luanda',capital_coords:[13.2,-8.8],population_2026:36.5,area:1246700,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Argentina':{capital_ar:'بوينس آيرس',capital_en:'Buenos Aires',capital_coords:[-58.4,-34.6],population_2026:46.8,area:2780400,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Armenia':{capital_ar:'يريفان',capital_en:'Yerevan',capital_coords:[44.5,40.2],population_2026:2.95,area:29743,lang_ar:'الأرمنية',lang_en:'Armenian'},
+        'Australia':{capital_ar:'كانبرا',capital_en:'Canberra',capital_coords:[149.1,-35.3],population_2026:26.8,area:7692024,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Austria':{capital_ar:'فيينا',capital_en:'Vienna',capital_coords:[16.4,48.2],population_2026:9.15,area:83871,lang_ar:'الألمانية',lang_en:'German'},
+        'Azerbaijan':{capital_ar:'باكو',capital_en:'Baku',capital_coords:[49.9,40.4],population_2026:10.5,area:86600,lang_ar:'الأذربيجانية',lang_en:'Azerbaijani'},
+        'Bahrain':{capital_ar:'المنامة',capital_en:'Manama',capital_coords:[50.6,26.2],population_2026:1.85,area:765,lang_ar:'العربية',lang_en:'Arabic'},
+        'Bangladesh':{capital_ar:'دكا',capital_en:'Dhaka',capital_coords:[90.4,23.7],population_2026:174,area:147570,lang_ar:'البنغالية',lang_en:'Bengali'},
+        'Belarus':{capital_ar:'مينسك',capital_en:'Minsk',capital_coords:[27.6,53.9],population_2026:9.2,area:207600,lang_ar:'البيلاروسية / الروسية',lang_en:'Belarusian / Russian'},
+        'Belgium':{capital_ar:'بروكسل',capital_en:'Brussels',capital_coords:[4.4,50.8],population_2026:11.8,area:30528,lang_ar:'الهولندية / الفرنسية / الألمانية',lang_en:'Dutch / French / German'},
+        'Belize':{capital_ar:'بلموبان',capital_en:'Belmopan',capital_coords:[-88.8,17.3],population_2026:0.43,area:22966,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Benin':{capital_ar:'بورتو نوفو',capital_en:'Porto-Novo',capital_coords:[2.6,6.5],population_2026:13.5,area:112622,lang_ar:'الفرنسية',lang_en:'French'},
+        'Bhutan':{capital_ar:'تيمفو',capital_en:'Thimphu',capital_coords:[89.6,27.5],population_2026:0.82,area:38394,lang_ar:'الزنغارية',lang_en:'Dzongkha'},
+        'Bolivia':{capital_ar:'سوكري',capital_en:'Sucre',capital_coords:[-65.3,-19.0],population_2026:12.2,area:1098581,lang_ar:'الإسبانية / الكيتشوا',lang_en:'Spanish / Quechua'},
+        'Bosnia and Herzegovina':{capital_ar:'سراييفو',capital_en:'Sarajevo',capital_coords:[18.4,43.9],population_2026:3.2,area:51197,lang_ar:'البوسنية / الكرواتية / الصربية',lang_en:'Bosnian / Croatian / Serbian'},
+        'Bosnia and Herz.':{capital_ar:'سراييفو',capital_en:'Sarajevo',capital_coords:[18.4,43.9],population_2026:3.2,area:51197,lang_ar:'البوسنية / الكرواتية / الصربية',lang_en:'Bosnian / Croatian / Serbian'},
+        'Botswana':{capital_ar:'غابورون',capital_en:'Gaborone',capital_coords:[25.9,-24.6],population_2026:2.45,area:582000,lang_ar:'الإنجليزية / التسوانية',lang_en:'English / Tswana'},
+        'Brazil':{capital_ar:'برازيليا',capital_en:'Brasília',capital_coords:[-47.9,-15.8],population_2026:217,area:8515767,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Brunei':{capital_ar:'بندر سري بكاوان',capital_en:'Bandar Seri Begawan',capital_coords:[114.9,4.9],population_2026:0.46,area:5765,lang_ar:'الماليزية',lang_en:'Malay'},
+        'Bulgaria':{capital_ar:'صوفيا',capital_en:'Sofia',capital_coords:[23.3,42.7],population_2026:6.65,area:110879,lang_ar:'البلغارية',lang_en:'Bulgarian'},
+        'Burkina Faso':{capital_ar:'واغادوغو',capital_en:'Ouagadougou',capital_coords:[-1.5,12.4],population_2026:23.5,area:272967,lang_ar:'الفرنسية',lang_en:'French'},
+        'Burundi':{capital_ar:'جيتيغا',capital_en:'Gitega',capital_coords:[30.0,-3.4],population_2026:13.2,area:27834,lang_ar:'الكيروندية / الفرنسية',lang_en:'Kirundi / French'},
+        'Cambodia':{capital_ar:'بنوم بنه',capital_en:'Phnom Penh',capital_coords:[104.9,11.6],population_2026:17.2,area:181035,lang_ar:'الخميرية',lang_en:'Khmer'},
+        'Cameroon':{capital_ar:'ياوندي',capital_en:'Yaoundé',capital_coords:[11.5,3.9],population_2026:29.5,area:475442,lang_ar:'الفرنسية / الإنجليزية',lang_en:'French / English'},
+        'Canada':{capital_ar:'أوتاوا',capital_en:'Ottawa',capital_coords:[-75.7,45.4],population_2026:39.8,area:9984670,lang_ar:'الإنجليزية / الفرنسية',lang_en:'English / French'},
+        'Cape Verde':{capital_ar:'برايا',capital_en:'Praia',capital_coords:[-23.5,14.9],population_2026:0.58,area:4033,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Central African Republic':{capital_ar:'بانغي',capital_en:'Bangui',capital_coords:[18.6,4.4],population_2026:5.8,area:622984,lang_ar:'الفرنسية / السانغوية',lang_en:'French / Sango'},
+        'Central African Rep.':{capital_ar:'بانغي',capital_en:'Bangui',capital_coords:[18.6,4.4],population_2026:5.8,area:622984,lang_ar:'الفرنسية / السانغوية',lang_en:'French / Sango'},
+        'Chad':{capital_ar:'نجامينا',capital_en:'N\'Djamena',capital_coords:[15.0,12.1],population_2026:18.5,area:1284000,lang_ar:'العربية / الفرنسية',lang_en:'Arabic / French'},
+        'Chile':{capital_ar:'سانتياغو',capital_en:'Santiago',capital_coords:[-70.6,-33.4],population_2026:20.5,area:756102,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'China':{capital_ar:'بكين',capital_en:'Beijing',capital_coords:[116.4,39.9],population_2026:1420,area:9596961,lang_ar:'الماندرين',lang_en:'Mandarin'},
+        'Colombia':{capital_ar:'بوغوتا',capital_en:'Bogotá',capital_coords:[-74.1,4.6],population_2026:53.5,area:1141748,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Comoros':{capital_ar:'موروني',capital_en:'Moroni',capital_coords:[43.3,-11.7],population_2026:0.92,area:2235,lang_ar:'العربية / الفرنسية / القمرية',lang_en:'Arabic / French / Comorian'},
+        'Congo':{capital_ar:'برازافيل',capital_en:'Brazzaville',capital_coords:[15.3,-4.3],population_2026:6.1,area:342000,lang_ar:'الفرنسية',lang_en:'French'},
+        'Costa Rica':{capital_ar:'سان خوسيه',capital_en:'San José',capital_coords:[-84.1,9.9],population_2026:5.3,area:51100,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Croatia':{capital_ar:'زغرب',capital_en:'Zagreb',capital_coords:[16.0,45.8],population_2026:3.85,area:56594,lang_ar:'الكرواتية',lang_en:'Croatian'},
+        'Cuba':{capital_ar:'هافانا',capital_en:'Havana',capital_coords:[-82.4,23.1],population_2026:11.1,area:109884,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Cyprus':{capital_ar:'نيقوسيا',capital_en:'Nicosia',capital_coords:[33.4,35.2],population_2026:1.25,area:9251,lang_ar:'اليونانية / التركية',lang_en:'Greek / Turkish'},
+        'Czech Republic':{capital_ar:'براغ',capital_en:'Prague',capital_coords:[14.4,50.1],population_2026:10.8,area:78866,lang_ar:'التشيكية',lang_en:'Czech'},
+        'Czechia':{capital_ar:'براغ',capital_en:'Prague',capital_coords:[14.4,50.1],population_2026:10.8,area:78866,lang_ar:'التشيكية',lang_en:'Czech'},
+        'Denmark':{capital_ar:'كوبنهاغن',capital_en:'Copenhagen',capital_coords:[12.6,55.7],population_2026:5.95,area:43094,lang_ar:'الدنماركية',lang_en:'Danish'},
+        'Djibouti':{capital_ar:'جيبوتي',capital_en:'Djibouti',capital_coords:[43.2,11.6],population_2026:1.05,area:23200,lang_ar:'العربية / الفرنسية',lang_en:'Arabic / French'},
+        'Dominican Republic':{capital_ar:'سانتو دومينغو',capital_en:'Santo Domingo',capital_coords:[-69.9,18.5],population_2026:11.3,area:48671,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Dominican Rep.':{capital_ar:'سانتو دومينغو',capital_en:'Santo Domingo',capital_coords:[-69.9,18.5],population_2026:11.3,area:48671,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'DR Congo':{capital_ar:'كينشاسا',capital_en:'Kinshasa',capital_coords:[15.3,-4.3],population_2026:105,area:2344858,lang_ar:'الفرنسية',lang_en:'French'},
+        'Ecuador':{capital_ar:'كيتو',capital_en:'Quito',capital_coords:[-78.5,-0.2],population_2026:18.4,area:283561,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Egypt':{capital_ar:'القاهرة',capital_en:'Cairo',capital_coords:[31.2,30.0],population_2026:112,area:1002450,lang_ar:'العربية',lang_en:'Arabic'},
+        'El Salvador':{capital_ar:'سان سلفادور',capital_en:'San Salvador',capital_coords:[-89.2,13.7],population_2026:6.8,area:21041,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Equatorial Guinea':{capital_ar:'مالابو',capital_en:'Malabo',capital_coords:[8.8,3.8],population_2026:1.6,area:28051,lang_ar:'الإسبانية / الفرنسية / البرتغالية',lang_en:'Spanish / French / Portuguese'},
+        'Eritrea':{capital_ar:'أسمرة',capital_en:'Asmara',capital_coords:[38.9,15.3],population_2026:3.8,area:117600,lang_ar:'التغرينية / العربية / الإنجليزية',lang_en:'Tigrinya / Arabic / English'},
+        'Estonia':{capital_ar:'تالين',capital_en:'Tallinn',capital_coords:[24.8,59.4],population_2026:1.35,area:45228,lang_ar:'الإستونية',lang_en:'Estonian'},
+        'Eswatini':{capital_ar:'مباباني',capital_en:'Mbabane',capital_coords:[31.1,-26.3],population_2026:1.22,area:17364,lang_ar:'الإنجليزية / السوازية',lang_en:'English / Swazi'},
+        'Ethiopia':{capital_ar:'أديس أبابا',capital_en:'Addis Ababa',capital_coords:[38.7,9.0],population_2026:128,area:1104300,lang_ar:'الأمهرية',lang_en:'Amharic'},
+        'Fiji':{capital_ar:'سوفا',capital_en:'Suva',capital_coords:[178.4,-18.1],population_2026:0.93,area:18274,lang_ar:'الإنجليزية / الفيجية',lang_en:'English / Fijian'},
+        'Finland':{capital_ar:'هلسنكي',capital_en:'Helsinki',capital_coords:[25.0,60.2],population_2026:5.6,area:338424,lang_ar:'الفنلندية / السويدية',lang_en:'Finnish / Swedish'},
+        'France':{capital_ar:'باريس',capital_en:'Paris',capital_coords:[2.3,48.8],population_2026:68.2,area:640679,lang_ar:'الفرنسية',lang_en:'French'},
+        'Gabon':{capital_ar:'ليبرفيل',capital_en:'Libreville',capital_coords:[9.5,0.4],population_2026:2.35,area:267668,lang_ar:'الفرنسية',lang_en:'French'},
+        'Gambia':{capital_ar:'بانجول',capital_en:'Banjul',capital_coords:[-16.6,13.5],population_2026:2.7,area:11295,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Georgia':{capital_ar:'تبليسي',capital_en:'Tbilisi',capital_coords:[44.8,41.7],population_2026:3.75,area:69700,lang_ar:'الجورجية',lang_en:'Georgian'},
+        'Germany':{capital_ar:'برلين',capital_en:'Berlin',capital_coords:[13.4,52.5],population_2026:84.5,area:357022,lang_ar:'الألمانية',lang_en:'German'},
+        'Ghana':{capital_ar:'أكرا',capital_en:'Accra',capital_coords:[-0.2,5.6],population_2026:33.5,area:238535,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Greece':{capital_ar:'أثينا',capital_en:'Athens',capital_coords:[23.7,38.0],population_2026:10.3,area:131957,lang_ar:'اليونانية',lang_en:'Greek'},
+        'Greenland':{capital_ar:'نوك',capital_en:'Nuuk',capital_coords:[-51.7,64.2],population_2026:0.057,area:2166086,lang_ar:'الغرينلاندية',lang_en:'Greenlandic'},
+        'Guatemala':{capital_ar:'غواتيمالا',capital_en:'Guatemala City',capital_coords:[-90.5,14.6],population_2026:18.8,area:108889,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Guinea':{capital_ar:'كوناكري',capital_en:'Conakry',capital_coords:[-13.7,9.5],population_2026:14.2,area:245857,lang_ar:'الفرنسية',lang_en:'French'},
+        'Guinea-Bissau':{capital_ar:'بيساو',capital_en:'Bissau',capital_coords:[-15.6,11.9],population_2026:2.15,area:36125,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Guyana':{capital_ar:'جورج تاون',capital_en:'Georgetown',capital_coords:[-58.2,6.8],population_2026:0.82,area:214969,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Haiti':{capital_ar:'بورت أو برانس',capital_en:'Port-au-Prince',capital_coords:[-72.3,18.5],population_2026:11.9,area:27750,lang_ar:'الفرنسية / الكريولية',lang_en:'French / Creole'},
+        'Honduras':{capital_ar:'تيغوسيغالبا',capital_en:'Tegucigalpa',capital_coords:[-87.2,14.1],population_2026:10.5,area:112492,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Hungary':{capital_ar:'بودابست',capital_en:'Budapest',capital_coords:[19.0,47.5],population_2026:9.6,area:93028,lang_ar:'المجرية',lang_en:'Hungarian'},
+        'Iceland':{capital_ar:'ريكيافيك',capital_en:'Reykjavik',capital_coords:[-21.9,64.1],population_2026:0.38,area:103000,lang_ar:'الآيسلندية',lang_en:'Icelandic'},
+        'India':{capital_ar:'نيودلهي',capital_en:'New Delhi',capital_coords:[77.2,28.6],population_2026:1445,area:3287263,lang_ar:'الهندية / الإنجليزية',lang_en:'Hindi / English'},
+        'Indonesia':{capital_ar:'جاكرتا',capital_en:'Jakarta',capital_coords:[106.8,-6.2],population_2026:282,area:1904569,lang_ar:'الإندونيسية',lang_en:'Indonesian'},
+        'Iran':{capital_ar:'طهران',capital_en:'Tehran',capital_coords:[51.4,35.7],population_2026:89,area:1648195,lang_ar:'الفارسية',lang_en:'Persian'},
+        'Iraq':{capital_ar:'بغداد',capital_en:'Baghdad',capital_coords:[44.4,33.3],population_2026:43.5,area:438317,lang_ar:'العربية / الكردية',lang_en:'Arabic / Kurdish'},
+        'Ireland':{capital_ar:'دبلن',capital_en:'Dublin',capital_coords:[-6.3,53.3],population_2026:5.25,area:70273,lang_ar:'الأيرلندية / الإنجليزية',lang_en:'Irish / English'},
+        'Israel':{capital_ar:'القدس',capital_en:'Jerusalem',capital_coords:[35.2,31.8],population_2026:9.65,area:20770,lang_ar:'العبرية / العربية',lang_en:'Hebrew / Arabic'},
+        'Italy':{capital_ar:'روما',capital_en:'Rome',capital_coords:[12.5,41.9],population_2026:58.8,area:301340,lang_ar:'الإيطالية',lang_en:'Italian'},
+        'Jamaica':{capital_ar:'كينغستون',capital_en:'Kingston',capital_coords:[-76.8,18.0],population_2026:2.98,area:10991,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Japan':{capital_ar:'طوكيو',capital_en:'Tokyo',capital_coords:[139.7,35.7],population_2026:123.5,area:377975,lang_ar:'اليابانية',lang_en:'Japanese'},
+        'Jordan':{capital_ar:'عمان',capital_en:'Amman',capital_coords:[35.9,32.0],population_2026:10.5,area:89342,lang_ar:'العربية',lang_en:'Arabic'},
+        'Kazakhstan':{capital_ar:'نور سلطان',capital_en:'Nur-Sultan',capital_coords:[71.4,51.1],population_2026:19.8,area:2724900,lang_ar:'الكازاخية / الروسية',lang_en:'Kazakh / Russian'},
+        'Kenya':{capital_ar:'نيروبي',capital_en:'Nairobi',capital_coords:[36.8,-1.3],population_2026:57.5,area:580367,lang_ar:'السواحيلية / الإنجليزية',lang_en:'Swahili / English'},
+        'Kuwait':{capital_ar:'الكويت',capital_en:'Kuwait City',capital_coords:[48.0,29.4],population_2026:4.5,area:17818,lang_ar:'العربية',lang_en:'Arabic'},
+        'Kyrgyzstan':{capital_ar:'بشكيك',capital_en:'Bishkek',capital_coords:[74.6,42.9],population_2026:6.9,area:199951,lang_ar:'القيرغيزية / الروسية',lang_en:'Kyrgyz / Russian'},
+        'Laos':{capital_ar:'فيانتيان',capital_en:'Vientiane',capital_coords:[102.6,17.9],population_2026:7.7,area:236800,lang_ar:'اللاوية',lang_en:'Lao'},
+        'Latvia':{capital_ar:'ريغا',capital_en:'Riga',capital_coords:[24.1,56.9],population_2026:1.88,area:64559,lang_ar:'اللاتفية',lang_en:'Latvian'},
+        'Lebanon':{capital_ar:'بيروت',capital_en:'Beirut',capital_coords:[35.5,33.9],population_2026:6.6,area:10452,lang_ar:'العربية',lang_en:'Arabic'},
+        'Lesotho':{capital_ar:'ماسيرو',capital_en:'Maseru',capital_coords:[27.5,-29.3],population_2026:2.2,area:30355,lang_ar:'السوتية / الإنجليزية',lang_en:'Sesotho / English'},
+        'Liberia':{capital_ar:'مونروفيا',capital_en:'Monrovia',capital_coords:[-10.8,6.3],population_2026:5.5,area:111369,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Libya':{capital_ar:'طرابلس',capital_en:'Tripoli',capital_coords:[13.2,32.9],population_2026:7.15,area:1759540,lang_ar:'العربية',lang_en:'Arabic'},
+        'Lithuania':{capital_ar:'فيلنيوس',capital_en:'Vilnius',capital_coords:[25.3,54.7],population_2026:2.72,area:65300,lang_ar:'الليتوانية',lang_en:'Lithuanian'},
+        'Luxembourg':{capital_ar:'لوكسمبورغ',capital_en:'Luxembourg',capital_coords:[6.1,49.6],population_2026:0.66,area:2586,lang_ar:'اللوكسمبورغية / الفرنسية / الألمانية',lang_en:'Luxembourgish / French / German'},
+        'Madagascar':{capital_ar:'أنتاناناريفو',capital_en:'Antananarivo',capital_coords:[47.5,-18.9],population_2026:30.5,area:587041,lang_ar:'الملغاشية / الفرنسية',lang_en:'Malagasy / French'},
+        'Malawi':{capital_ar:'ليلونغوي',capital_en:'Lilongwe',capital_coords:[33.8,-14.0],population_2026:21.5,area:118484,lang_ar:'الإنجليزية / الشيشيوا',lang_en:'English / Chichewa'},
+        'Malaysia':{capital_ar:'كوالالمبور',capital_en:'Kuala Lumpur',capital_coords:[101.7,3.1],population_2026:34.2,area:330803,lang_ar:'الماليزية',lang_en:'Malay'},
+        'Maldives':{capital_ar:'ماليه',capital_en:'Malé',capital_coords:[73.5,4.2],population_2026:0.56,area:298,lang_ar:'الديفيهية',lang_en:'Dhivehi'},
+        'Mali':{capital_ar:'باماكو',capital_en:'Bamako',capital_coords:[-8.0,12.7],population_2026:22.5,area:1240192,lang_ar:'الفرنسية',lang_en:'French'},
+        'Malta':{capital_ar:'فاليتا',capital_en:'Valletta',capital_coords:[14.5,35.9],population_2026:0.53,area:316,lang_ar:'المالطية / الإنجليزية',lang_en:'Maltese / English'},
+        'Mauritania':{capital_ar:'نواكشوط',capital_en:'Nouakchott',capital_coords:[-15.9,18.1],population_2026:4.9,area:1030700,lang_ar:'العربية',lang_en:'Arabic'},
+        'Mauritius':{capital_ar:'بورت لويس',capital_en:'Port Louis',capital_coords:[57.5,-20.2],population_2026:1.32,area:2040,lang_ar:'الإنجليزية / الفرنسية',lang_en:'English / French'},
+        'Mexico':{capital_ar:'مكسيكو',capital_en:'Mexico City',capital_coords:[-99.1,19.4],population_2026:132,area:1964375,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Moldova':{capital_ar:'كيشيناو',capital_en:'Chișinău',capital_coords:[28.9,47.0],population_2026:2.55,area:33846,lang_ar:'الرومانية',lang_en:'Romanian'},
+        'Mongolia':{capital_ar:'أولان باتور',capital_en:'Ulaanbaatar',capital_coords:[106.9,47.9],population_2026:3.45,area:1564116,lang_ar:'المنغولية',lang_en:'Mongolian'},
+        'Montenegro':{capital_ar:'بودغوريتسا',capital_en:'Podgorica',capital_coords:[19.3,42.4],population_2026:0.625,area:13812,lang_ar:'الجبل الأسود',lang_en:'Montenegrin'},
+        'Morocco':{capital_ar:'الرباط',capital_en:'Rabat',capital_coords:[-6.8,34.0],population_2026:38.5,area:446550,lang_ar:'العربية / الأمازيغية',lang_en:'Arabic / Berber'},
+        'Mozambique':{capital_ar:'مابوتو',capital_en:'Maputo',capital_coords:[32.6,-25.9],population_2026:34.2,area:801590,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Myanmar':{capital_ar:'نايبيداو',capital_en:'Naypyidaw',capital_coords:[96.1,19.7],population_2026:56.5,area:676578,lang_ar:'البورمية',lang_en:'Burmese'},
+        'Namibia':{capital_ar:'ويندهوك',capital_en:'Windhoek',capital_coords:[17.1,-22.6],population_2026:2.65,area:825615,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Nepal':{capital_ar:'كاتماندو',capital_en:'Kathmandu',capital_coords:[85.3,27.7],population_2026:31.5,area:147181,lang_ar:'النيبالية',lang_en:'Nepali'},
+        'Netherlands':{capital_ar:'أمستردام',capital_en:'Amsterdam',capital_coords:[4.9,52.4],population_2026:17.8,area:41543,lang_ar:'الهولندية',lang_en:'Dutch'},
+        'New Zealand':{capital_ar:'ويلينغتون',capital_en:'Wellington',capital_coords:[174.8,-41.3],population_2026:5.25,area:270467,lang_ar:'الإنجليزية / الماورية',lang_en:'English / Maori'},
+        'Nicaragua':{capital_ar:'ماناغوا',capital_en:'Managua',capital_coords:[-86.2,12.1],population_2026:6.85,area:130373,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Niger':{capital_ar:'نيامي',capital_en:'Niamey',capital_coords:[2.1,13.5],population_2026:28.2,area:1267000,lang_ar:'الفرنسية',lang_en:'French'},
+        'Nigeria':{capital_ar:'أبوجا',capital_en:'Abuja',capital_coords:[7.5,9.1],population_2026:225,area:923768,lang_ar:'الإنجليزية',lang_en:'English'},
+        'North Korea':{capital_ar:'بيونغ يانغ',capital_en:'Pyongyang',capital_coords:[125.7,39.0],population_2026:26.2,area:120538,lang_ar:'الكورية',lang_en:'Korean'},
+        'North Macedonia':{capital_ar:'سكوبيه',capital_en:'Skopje',capital_coords:[21.4,42.0],population_2026:2.08,area:25713,lang_ar:'المقدونية',lang_en:'Macedonian'},
+        'Norway':{capital_ar:'أوسلو',capital_en:'Oslo',capital_coords:[10.7,59.9],population_2026:5.55,area:323802,lang_ar:'النرويجية',lang_en:'Norwegian'},
+        'Oman':{capital_ar:'مسقط',capital_en:'Muscat',capital_coords:[58.6,23.6],population_2026:5.3,area:309500,lang_ar:'العربية',lang_en:'Arabic'},
+        'Pakistan':{capital_ar:'إسلام أباد',capital_en:'Islamabad',capital_coords:[73.0,33.7],population_2026:242,area:881913,lang_ar:'الأردية / الإنجليزية',lang_en:'Urdu / English'},
+        'Palestine':{capital_ar:'القدس الشرقية',capital_en:'East Jerusalem',capital_coords:[35.2,31.8],population_2026:5.5,area:6020,lang_ar:'العربية',lang_en:'Arabic'},
+        'Panama':{capital_ar:'بنما',capital_en:'Panama City',capital_coords:[-79.5,8.9],population_2026:4.5,area:75417,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Papua New Guinea':{capital_ar:'بورت مورسبي',capital_en:'Port Moresby',capital_coords:[147.2,-9.5],population_2026:9.5,area:462840,lang_ar:'الإنجليزية / توك بيسين',lang_en:'English / Tok Pisin'},
+        'Paraguay':{capital_ar:'أسونسيون',capital_en:'Asunción',capital_coords:[-57.6,-25.3],population_2026:7.4,area:406752,lang_ar:'الإسبانية / الغوارانية',lang_en:'Spanish / Guarani'},
+        'Peru':{capital_ar:'ليما',capital_en:'Lima',capital_coords:[-77.0,-12.0],population_2026:34.5,area:1285216,lang_ar:'الإسبانية / الكيتشوا',lang_en:'Spanish / Quechua'},
+        'Philippines':{capital_ar:'مانيلا',capital_en:'Manila',capital_coords:[121.0,14.6],population_2026:117,area:300000,lang_ar:'الفلبينية / الإنجليزية',lang_en:'Filipino / English'},
+        'Poland':{capital_ar:'وارسو',capital_en:'Warsaw',capital_coords:[21.0,52.2],population_2026:37.8,area:312696,lang_ar:'البولندية',lang_en:'Polish'},
+        'Portugal':{capital_ar:'لشبونة',capital_en:'Lisbon',capital_coords:[-9.1,38.7],population_2026:10.35,area:92090,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Qatar':{capital_ar:'الدوحة',capital_en:'Doha',capital_coords:[51.5,25.3],population_2026:3.05,area:11586,lang_ar:'العربية',lang_en:'Arabic'},
+        'Romania':{capital_ar:'بوخارست',capital_en:'Bucharest',capital_coords:[26.1,44.4],population_2026:18.5,area:238391,lang_ar:'الرومانية',lang_en:'Romanian'},
+        'Russia':{capital_ar:'موسكو',capital_en:'Moscow',capital_coords:[37.6,55.7],population_2026:144,area:17098242,lang_ar:'الروسية',lang_en:'Russian'},
+        'Rwanda':{capital_ar:'كيغالي',capital_en:'Kigali',capital_coords:[30.1,-1.9],population_2026:14.2,area:26338,lang_ar:'الكينيارواندية / الفرنسية / الإنجليزية',lang_en:'Kinyarwanda / French / English'},
+        'Saudi Arabia':{capital_ar:'الرياض',capital_en:'Riyadh',capital_coords:[46.7,24.7],population_2026:37.2,area:2149690,lang_ar:'العربية',lang_en:'Arabic'},
+        'Senegal':{capital_ar:'داكار',capital_en:'Dakar',capital_coords:[-17.4,14.7],population_2026:18.5,area:196722,lang_ar:'الفرنسية',lang_en:'French'},
+        'Serbia':{capital_ar:'بلغراد',capital_en:'Belgrade',capital_coords:[20.5,44.8],population_2026:6.75,area:88361,lang_ar:'الصربية',lang_en:'Serbian'},
+        'Sierra Leone':{capital_ar:'فريتاون',capital_en:'Freetown',capital_coords:[-13.2,8.5],population_2026:8.7,area:71740,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Singapore':{capital_ar:'سنغافورة',capital_en:'Singapore',capital_coords:[103.8,1.3],population_2026:5.85,area:728,lang_ar:'الإنجليزية / الماليزية / الصينية / التاميلية',lang_en:'English / Malay / Chinese / Tamil'},
+        'Slovakia':{capital_ar:'براتيسلافا',capital_en:'Bratislava',capital_coords:[17.1,48.1],population_2026:5.45,area:49037,lang_ar:'السلوفاكية',lang_en:'Slovak'},
+        'Slovenia':{capital_ar:'ليوبليانا',capital_en:'Ljubljana',capital_coords:[14.5,46.1],population_2026:2.12,area:20273,lang_ar:'السلوفينية',lang_en:'Slovenian'},
+        'Somalia':{capital_ar:'مقديشو',capital_en:'Mogadishu',capital_coords:[45.3,2.0],population_2026:18.2,area:637657,lang_ar:'الصومالية / العربية',lang_en:'Somali / Arabic'},
+        'Somaliland':{capital_ar:'هرجيسا',capital_en:'Hargeisa',capital_coords:[44.5,9.5],population_2026:4.5,area:176000,lang_ar:'الصومالية / العربية',lang_en:'Somali / Arabic'},
+        'South Africa':{capital_ar:'بريتوريا',capital_en:'Pretoria',capital_coords:[28.2,-25.7],population_2026:62.5,area:1221037,lang_ar:'الإنجليزية / الأفريكانية / 9 لغات أخرى',lang_en:'English / Afrikaans / 9 others'},
+        'South Korea':{capital_ar:'سيول',capital_en:'Seoul',capital_coords:[127.0,37.6],population_2026:51.8,area:100210,lang_ar:'الكورية',lang_en:'Korean'},
+        'South Sudan':{capital_ar:'جوبا',capital_en:'Juba',capital_coords:[31.6,4.9],population_2026:11.6,area:644329,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Spain':{capital_ar:'مدريد',capital_en:'Madrid',capital_coords:[-3.7,40.4],population_2026:48.2,area:505992,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Sri Lanka':{capital_ar:'كولومبو',capital_en:'Colombo',capital_coords:[79.9,6.9],population_2026:22.5,area:65610,lang_ar:'السنهالية / التاميلية',lang_en:'Sinhala / Tamil'},
+        'Sudan':{capital_ar:'الخرطوم',capital_en:'Khartoum',capital_coords:[32.5,15.5],population_2026:47.5,area:1886068,lang_ar:'العربية / الإنجليزية',lang_en:'Arabic / English'},
+        'Suriname':{capital_ar:'باراماريبو',capital_en:'Paramaribo',capital_coords:[-55.2,5.9],population_2026:0.6,area:163820,lang_ar:'الهولندية',lang_en:'Dutch'},
+        'Sweden':{capital_ar:'ستوكهولم',capital_en:'Stockholm',capital_coords:[18.1,59.3],population_2026:10.7,area:450295,lang_ar:'السويدية',lang_en:'Swedish'},
+        'Switzerland':{capital_ar:'برن',capital_en:'Bern',capital_coords:[7.5,46.9],population_2026:8.85,area:41284,lang_ar:'الألمانية / الفرنسية / الإيطالية / الرومانشية',lang_en:'German / French / Italian / Romansh'},
+        'Syria':{capital_ar:'دمشق',capital_en:'Damascus',capital_coords:[36.3,33.5],population_2026:19.2,area:185180,lang_ar:'العربية',lang_en:'Arabic'},
+        'Taiwan':{capital_ar:'تايبيه',capital_en:'Taipei',capital_coords:[121.5,25.0],population_2026:23.9,area:36193,lang_ar:'الماندرين',lang_en:'Mandarin'},
+        'Tajikistan':{capital_ar:'دوشنبه',capital_en:'Dushanbe',capital_coords:[68.8,38.5],population_2026:10.2,area:143100,lang_ar:'الطاجيكية',lang_en:'Tajik'},
+        'Tanzania':{capital_ar:'دودوما',capital_en:'Dodoma',capital_coords:[35.7,-6.2],population_2026:66.2,area:945087,lang_ar:'السواحيلية / الإنجليزية',lang_en:'Swahili / English'},
+        'Thailand':{capital_ar:'بانكوك',capital_en:'Bangkok',capital_coords:[100.5,13.7],population_2026:72.5,area:513120,lang_ar:'التايلاندية',lang_en:'Thai'},
+        'Timor-Leste':{capital_ar:'ديلي',capital_en:'Dili',capital_coords:[125.6,-8.6],population_2026:1.38,area:14874,lang_ar:'التيتومية / البرتغالية',lang_en:'Tetum / Portuguese'},
+        'Togo':{capital_ar:'لومي',capital_en:'Lomé',capital_coords:[1.2,6.1],population_2026:8.8,area:56785,lang_ar:'الفرنسية',lang_en:'French'},
+        'Tonga':{capital_ar:'نوكوالوفا',capital_en:'Nukuʻalofa',capital_coords:[-175.2,-21.1],population_2026:0.105,area:747,lang_ar:'التونغية / الإنجليزية',lang_en:'Tongan / English'},
+        'Trinidad and Tobago':{capital_ar:'بورت أوف سبين',capital_en:'Port of Spain',capital_coords:[-61.5,10.7],population_2026:1.43,area:5130,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Tunisia':{capital_ar:'تونس',capital_en:'Tunis',capital_coords:[10.2,36.8],population_2026:12.3,area:163610,lang_ar:'العربية',lang_en:'Arabic'},
+        'Turkey':{capital_ar:'أنقرة',capital_en:'Ankara',capital_coords:[32.9,39.9],population_2026:87.5,area:783562,lang_ar:'التركية',lang_en:'Turkish'},
+        'Turkmenistan':{capital_ar:'عشق آباد',capital_en:'Ashgabat',capital_coords:[58.4,37.9],population_2026:6.35,area:488100,lang_ar:'التركمانية',lang_en:'Turkmen'},
+        'Uganda':{capital_ar:'كمبالا',capital_en:'Kampala',capital_coords:[32.6,0.3],population_2026:50.5,area:241038,lang_ar:'الإنجليزية / السواحيلية',lang_en:'English / Swahili'},
+        'Ukraine':{capital_ar:'كييف',capital_en:'Kyiv',capital_coords:[30.5,50.4],population_2026:38.5,area:603500,lang_ar:'الأوكرانية',lang_en:'Ukrainian'},
+        'United Arab Emirates':{capital_ar:'أبو ظبي',capital_en:'Abu Dhabi',capital_coords:[54.4,24.5],population_2026:10.4,area:83600,lang_ar:'العربية',lang_en:'Arabic'},
+        'United Kingdom':{capital_ar:'لندن',capital_en:'London',capital_coords:[-0.1,51.5],population_2026:68.5,area:243610,lang_ar:'الإنجليزية',lang_en:'English'},
+        'United States':{capital_ar:'واشنطن',capital_en:'Washington D.C.',capital_coords:[-77.0,38.9],population_2026:338,area:9833520,lang_ar:'الإنجليزية',lang_en:'English'},
+        'United States of America':{capital_ar:'واشنطن',capital_en:'Washington D.C.',capital_coords:[-77.0,38.9],population_2026:338,area:9833520,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Uruguay':{capital_ar:'مونتيفيديو',capital_en:'Montevideo',capital_coords:[-56.2,-34.9],population_2026:3.55,area:176215,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Uzbekistan':{capital_ar:'طشقند',capital_en:'Tashkent',capital_coords:[69.3,41.3],population_2026:35.8,area:447400,lang_ar:'الأوزبكية',lang_en:'Uzbek'},
+        'Vanuatu':{capital_ar:'بورت فيلا',capital_en:'Port Vila',capital_coords:[168.3,-17.7],population_2026:0.32,area:12189,lang_ar:'البيسلامية / الفرنسية / الإنجليزية',lang_en:'Bislama / French / English'},
+        'Venezuela':{capital_ar:'كراكاس',capital_en:'Caracas',capital_coords:[-66.9,10.5],population_2026:29.2,area:916445,lang_ar:'الإسبانية',lang_en:'Spanish'},
+        'Vietnam':{capital_ar:'هانوي',capital_en:'Hanoi',capital_coords:[105.8,21.0],population_2026:101,area:331212,lang_ar:'الفيتنامية',lang_en:'Vietnamese'},
+        'Yemen':{capital_ar:'صنعاء',capital_en:'Sanaa',capital_coords:[44.2,15.3],population_2026:32.5,area:527968,lang_ar:'العربية',lang_en:'Arabic'},
+        'Zambia':{capital_ar:'لوساكا',capital_en:'Lusaka',capital_coords:[28.3,-15.4],population_2026:20.5,area:752612,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Zimbabwe':{capital_ar:'هراري',capital_en:'Harare',capital_coords:[31.1,-17.8],population_2026:16.2,area:390757,lang_ar:'الإنجليزية / الشونا / النديبيلية',lang_en:'English / Shona / Ndebele'},
+        'Kosovo':{capital_ar:'بريشتينا',capital_en:'Pristina',capital_coords:[21.2,42.7],population_2026:1.82,area:10908,lang_ar:'الألبانية / الصربية',lang_en:'Albanian / Serbian'},
+        'Western Sahara':{capital_ar:'العيون',capital_en:'Laayoune',capital_coords:[-13.2,27.1],population_2026:0.62,area:266000,lang_ar:'العربية / الإسبانية',lang_en:'Arabic / Spanish'},
+        'W. Sahara':{capital_ar:'العيون',capital_en:'Laayoune',capital_coords:[-13.2,27.1],population_2026:0.62,area:266000,lang_ar:'العربية / الإسبانية',lang_en:'Arabic / Spanish'},
+        'Côte d\'Ivoire':{capital_ar:'ياموسوكرو',capital_en:'Yamoussoukro',capital_coords:[-5.3,6.8],population_2026:29.5,area:322463,lang_ar:'الفرنسية',lang_en:'French'},
+        'Ivory Coast':{capital_ar:'ياموسوكرو',capital_en:'Yamoussoukro',capital_coords:[-5.3,6.8],population_2026:29.5,area:322463,lang_ar:'الفرنسية',lang_en:'French'},
+        'Puerto Rico':{capital_ar:'سان خوان',capital_en:'San Juan',capital_coords:[-66.1,18.5],population_2026:3.22,area:9104,lang_ar:'الإسبانية / الإنجليزية',lang_en:'Spanish / English'},
+        'Samoa':{capital_ar:'أبيا',capital_en:'Apia',capital_coords:[-171.8,-13.8],population_2026:0.21,area:2831,lang_ar:'الساموية / الإنجليزية',lang_en:'Samoan / English'},
+        'Solomon Islands':{capital_ar:'هونيارا',capital_en:'Honiara',capital_coords:[159.9,-9.4],population_2026:0.73,area:28896,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Seychelles':{capital_ar:'فيكتوريا',capital_en:'Victoria',capital_coords:[55.4,-4.6],population_2026:0.102,area:455,lang_ar:'الإنجليزية / الفرنسية / الكريولية',lang_en:'English / French / Creole'},
+        'São Tomé and Príncipe':{capital_ar:'ساو تومي',capital_en:'São Tomé',capital_coords:[6.7,0.3],population_2026:0.21,area:964,lang_ar:'البرتغالية',lang_en:'Portuguese'},
+        'Saint Lucia':{capital_ar:'كاستريس',capital_en:'Castries',capital_coords:[-60.9,14.0],population_2026:0.185,area:616,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Grenada':{capital_ar:'سانت جورجز',capital_en:'St. George\'s',capital_coords:[-61.7,12.1],population_2026:0.115,area:344,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Barbados':{capital_ar:'بريدج تاون',capital_en:'Bridgetown',capital_coords:[-59.6,13.1],population_2026:0.285,area:430,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Bahamas':{capital_ar:'ناساو',capital_en:'Nassau',capital_coords:[-77.3,25.1],population_2026:0.42,area:13943,lang_ar:'الإنجليزية',lang_en:'English'},
+        'Republic of the Congo':{capital_ar:'برازافيل',capital_en:'Brazzaville',capital_coords:[15.3,-4.3],population_2026:6.1,area:342000,lang_ar:'الفرنسية',lang_en:'French'},
+        'Democratic Republic of the Congo':{capital_ar:'كينشاسا',capital_en:'Kinshasa',capital_coords:[15.3,-4.3],population_2026:105,area:2344858,lang_ar:'الفرنسية',lang_en:'French'},
+        'Dem. Rep. Congo':{capital_ar:'كينشاسا',capital_en:'Kinshasa',capital_coords:[15.3,-4.3],population_2026:105,area:2344858,lang_ar:'الفرنسية',lang_en:'French'}
+    };
+
+    const arabicNames = {
+        'Afghanistan':'أفغانستان','Albania':'ألبانيا','Algeria':'الجزائر','Angola':'أنغولا','Argentina':'الأرجنتين',
+        'Armenia':'أرمينيا','Australia':'أستراليا','Austria':'النمسا','Azerbaijan':'أذربيجان','Bahrain':'البحرين',
+        'Bangladesh':'بنغلاديش','Belarus':'بيلاروسيا','Belgium':'بلجيكا','Belize':'بليز','Benin':'بنين',
+        'Bhutan':'بوتان','Bolivia':'بوليفيا','Bosnia':'البوسنة','Botswana':'بوتسوانا','Brazil':'البرازيل',
+        'Brunei':'بروناي','Bulgaria':'بلغاريا','Burkina Faso':'بوركينا فاسو','Burundi':'بوروندي','Cambodia':'كمبوديا',
+        'Cameroon':'الكاميرون','Canada':'كندا','Cape Verde':'الرأس الأخضر','Central African Republic':'جمهورية أفريقيا الوسطى',
+        'Chad':'تشاد','Chile':'تشيلي','China':'الصين','Colombia':'كولومبيا','Comoros':'جزر القمر',
+        'Congo':'الكونغو','Costa Rica':'كوستاريكا','Croatia':'كرواتيا','Cuba':'كوبا','Cyprus':'قبرص',
+        'Czech Republic':'التشيك','Denmark':'الدنمارك','Djibouti':'جيبوتي','Dominican Republic':'جمهورية الدومينيكان',
+        'DR Congo':'جمهورية الكونغو الديمقراطية','Ecuador':'الإكوادور','Egypt':'مصر','El Salvador':'السلفادور',
+        'Equatorial Guinea':'غينيا الاستوائية','Eritrea':'إريتريا','Estonia':'إستونيا','Eswatini':'إسواتيني',
+        'Ethiopia':'إثيوبيا','Fiji':'فيجي','Finland':'فنلندا','France':'فرنسا','Gabon':'الغابون',
+        'Gambia':'غامبيا','Georgia':'جورجيا','Germany':'ألمانيا','Ghana':'غانا','Greece':'اليونان',
+        'Greenland':'غرينلاند','Guatemala':'غواتيمالا','Guinea':'غينيا','Guinea-Bissau':'غينيا بيساو','Guyana':'غيانا',
+        'Haiti':'هايتي','Honduras':'هندوراس','Hungary':'المجر','Iceland':'آيسلندا','India':'الهند',
+        'Indonesia':'إندونيسيا','Iran':'إيران','Iraq':'العراق','Ireland':'أيرلندا','Israel':'إسرائيل',
+        'Italy':'إيطاليا','Jamaica':'جامايكا','Japan':'اليابان','Jordan':'الأردن','Kazakhstan':'كازاخستان',
+        'Kenya':'كينيا','Kuwait':'الكويت','Kyrgyzstan':'قيرغيزستان','Laos':'لاوس','Latvia':'لاتفيا',
+        'Lebanon':'لبنان','Lesotho':'ليسوتو','Liberia':'ليبيريا','Libya':'ليبيا','Lithuania':'ليتوانيا',
+        'Luxembourg':'لوكسمبورغ','Madagascar':'مدغشقر','Malawi':'مالاوي','Malaysia':'ماليزيا','Maldives':'جزر المالديف',
+        'Mali':'مالي','Malta':'مالطا','Mauritania':'موريتانيا','Mauritius':'موريشيوس','Mexico':'المكسيك',
+        'Moldova':'مولدوفا','Mongolia':'منغوليا','Montenegro':'الجبل الأسود','Morocco':'المغرب','Mozambique':'موزمبيق',
+        'Myanmar':'ميانمار','Namibia':'ناميبيا','Nepal':'نيبال','Netherlands':'هولندا','New Zealand':'نيوزيلندا',
+        'Nicaragua':'نيكاراغوا','Niger':'النيجر','Nigeria':'نيجيريا','North Korea':'كوريا الشمالية','North Macedonia':'مقدونيا الشمالية',
+        'Norway':'النرويج','Oman':'عُمان','Pakistan':'باكستان','Palestine':'فلسطين','Panama':'بنما',
+        'Papua New Guinea':'بابوا غينيا الجديدة','Paraguay':'باراغواي','Peru':'بيرو','Philippines':'الفلبين','Poland':'بولندا',
+        'Portugal':'البرتغال','Qatar':'قطر','Romania':'رومانيا','Russia':'روسيا','Rwanda':'رواندا',
+        'Saudi Arabia':'السعودية','Senegal':'السنغال','Serbia':'صربيا','Sierra Leone':'سيراليون','Singapore':'سنغافورة',
+        'Slovakia':'سلوفاكيا','Slovenia':'سلوفينيا','Somalia':'الصومال','Somaliland':'أرض الصومال','South Africa':'جنوب أفريقيا','South Korea':'كوريا الجنوبية',
+        'South Sudan':'جنوب السودان','Spain':'إسبانيا','Sri Lanka':'سريلانكا','Sudan':'السودان','Suriname':'سورينام',
+        'Sweden':'السويد','Switzerland':'سويسرا','Syria':'سوريا','Taiwan':'تايوان','Tajikistan':'طاجيكستان',
+        'Tanzania':'تنزانيا','Thailand':'تايلاند','Timor-Leste':'تيمور الشرقية','Togo':'توغو','Tonga':'تونغا',
+        'Trinidad and Tobago':'ترينيداد وتوباغو','Tunisia':'تونس','Turkey':'تركيا','Turkmenistan':'تركمانستان',
+        'Uganda':'أوغندا','Ukraine':'أوكرانيا','United Arab Emirates':'الإمارات','United Kingdom':'المملكة المتحدة',
+        'United States':'الولايات المتحدة','Uruguay':'أوروغواي','Uzbekistan':'أوزبكستان','Vanuatu':'فانواتو',
+        'Venezuela':'فنزويلا','Vietnam':'فيتنام','Yemen':'اليمن','Zambia':'زامبيا','Zimbabwe':'زيمبابوي',
+        'Kosovo':'كوسوفو','Western Sahara':'الصحراء الغربية','W. Sahara':'الصحراء الغربية','Czechia':'التشيك',
+        'Côte d\'Ivoire':'ساحل العاج','Ivory Coast':'ساحل العاج','Central African Rep.':'جمهورية أفريقيا الوسطى',
+        'Dominican Rep.':'جمهورية الدومينيكان','Bosnia and Herz.':'البوسنة والهرسك','Eq. Guinea':'غينيا الاستوائية',
+        'S. Sudan':'جنوب السودان','N. Cyprus':'شمال قبرص','Solomon Is.':'جزر سليمان','Bahamas':'جزر البهاما',
+        'Antarctica':'القارة القطبية الجنوبية',
+        'United States of America':'الولايات المتحدة',
+        'Republic of the Congo':'الكونغو',
+        'Democratic Republic of the Congo':'جمهورية الكونغو الديمقراطية',
+        'Dem. Rep. Congo':'جمهورية الكونغو الديمقراطية'
+    };
+
+    const religionByCountry = {
+        'Afghanistan':'muslim','Albania':'muslim','Algeria':'muslim','Angola':'christian','Argentina':'christian',
+        'Armenia':'christian','Australia':'christian','Austria':'christian','Azerbaijan':'muslim','Bahrain':'muslim',
+        'Bangladesh':'muslim','Belarus':'christian','Belgium':'christian','Belize':'christian','Benin':'christian',
+        'Bhutan':'buddhist','Bolivia':'christian','Bosnia':'muslim','Botswana':'christian','Brazil':'christian',
+        'Brunei':'muslim','Bulgaria':'christian','Burkina Faso':'muslim','Burundi':'christian','Cambodia':'buddhist',
+        'Cameroon':'christian','Canada':'christian','Cape Verde':'christian','Central African Republic':'christian',
+        'Chad':'muslim','Chile':'christian','China':'other','Colombia':'christian','Comoros':'muslim',
+        'Congo':'christian','Costa Rica':'christian','Croatia':'christian','Cuba':'christian','Cyprus':'christian',
+        'Czech Republic':'christian','DR Congo':'christian','Denmark':'christian','Djibouti':'muslim','Dominican Republic':'christian',
+        'Ecuador':'christian','Egypt':'muslim','El Salvador':'christian','Equatorial Guinea':'christian','Eritrea':'christian',
+        'Estonia':'christian','Eswatini':'christian','Ethiopia':'christian','Fiji':'christian','Finland':'christian',
+        'France':'christian','Gabon':'christian','Gambia':'muslim','Georgia':'christian','Germany':'christian',
+        'Ghana':'christian','Greece':'christian','Greenland':'christian','Guatemala':'christian','Guinea':'muslim',
+        'Guinea-Bissau':'muslim','Guyana':'christian','Haiti':'christian','Honduras':'christian','Hungary':'christian',
+        'Iceland':'christian','India':'hindu','Indonesia':'muslim','Iran':'muslim','Iraq':'muslim',
+        'Ireland':'christian','Israel':'jewish','Italy':'christian','Jamaica':'christian','Japan':'other',
+        'Jordan':'muslim','Kazakhstan':'muslim','Kenya':'christian','Kuwait':'muslim','Kyrgyzstan':'muslim',
+        'Laos':'buddhist','Latvia':'christian','Lebanon':'muslim','Lesotho':'christian','Liberia':'christian',
+        'Libya':'muslim','Lithuania':'christian','Luxembourg':'christian','Madagascar':'christian','Malawi':'christian',
+        'Malaysia':'muslim','Maldives':'muslim','Mali':'muslim','Malta':'christian','Mauritania':'muslim',
+        'Mauritius':'hindu','Mexico':'christian','Moldova':'christian','Mongolia':'buddhist','Montenegro':'christian',
+        'Morocco':'muslim','Mozambique':'christian','Myanmar':'buddhist','Namibia':'christian','Nepal':'hindu',
+        'Netherlands':'christian','New Zealand':'christian','Nicaragua':'christian','Niger':'muslim','Nigeria':'muslim',
+        'North Korea':'other','North Macedonia':'christian','Norway':'christian','Oman':'muslim','Pakistan':'muslim',
+        'Palestine':'muslim','Panama':'christian','Papua New Guinea':'christian','Paraguay':'christian','Peru':'christian',
+        'Philippines':'christian','Poland':'christian','Portugal':'christian','Qatar':'muslim','Romania':'christian',
+        'Russia':'christian','Rwanda':'christian','Saudi Arabia':'muslim','Senegal':'muslim','Serbia':'christian',
+        'Sierra Leone':'muslim','Singapore':'other','Slovakia':'christian','Slovenia':'christian','Somalia':'muslim',
+        'Somaliland':'muslim','South Africa':'christian','South Korea':'other','South Sudan':'christian','Spain':'christian','Sri Lanka':'buddhist',
+        'Sudan':'muslim','Suriname':'christian','Sweden':'christian','Switzerland':'christian','Syria':'muslim',
+        'Taiwan':'other','Tajikistan':'muslim','Tanzania':'christian','Thailand':'buddhist','Timor-Leste':'christian',
+        'Togo':'christian','Tonga':'christian','Trinidad and Tobago':'christian','Tunisia':'muslim','Turkey':'muslim',
+        'Turkmenistan':'muslim','Uganda':'christian','Ukraine':'christian','United Arab Emirates':'muslim',
+        'United Kingdom':'christian','United States':'christian','Uruguay':'christian','Uzbekistan':'muslim',
+        'Vanuatu':'christian','Venezuela':'christian','Vietnam':'other','Yemen':'muslim','Zambia':'christian',
+        'Zimbabwe':'christian','Kosovo':'muslim','Western Sahara':'muslim','Puerto Rico':'christian','Samoa':'christian',
+        'Solomon Islands':'christian','Seychelles':'christian','São Tomé and Príncipe':'christian',
+        'Saint Lucia':'christian','Grenada':'christian','Barbados':'christian','Bahamas':'christian',
+        'Czechia':'christian','W. Sahara':'muslim','Côte d\'Ivoire':'christian','Ivory Coast':'christian','Central African Rep.':'christian','Dominican Rep.':'christian',
+        'Bosnia and Herz.':'muslim','Eq. Guinea':'christian','S. Sudan':'christian','Solomon Is.':'christian',
+        'United States of America':'christian','Republic of the Congo':'christian','Democratic Republic of the Congo':'christian',
+        'Dem. Rep. Congo':'christian'
+    };
+
+    const denominationByCountry = {
+        'Saudi Arabia':'sunni','Algeria':'sunni','Morocco':'sunni','Tunisia':'sunni','Libya':'sunni',
+        'Egypt':'sunni','Sudan':'sunni','Mauritania':'sunni','Senegal':'sunni','Mali':'sunni','Niger':'sunni',
+        'Chad':'sunni','Somalia':'sunni','Djibouti':'sunni','Comoros':'sunni','Turkey':'sunni',
+        'Afghanistan':'sunni','Pakistan':'sunni','Bangladesh':'sunni','Indonesia':'sunni','Malaysia':'sunni',
+        'Brunei':'sunni','Kazakhstan':'sunni','Uzbekistan':'sunni','Turkmenistan':'sunni','Kyrgyzstan':'sunni',
+        'Tajikistan':'sunni','United Arab Emirates':'sunni','Qatar':'sunni','Kuwait':'sunni','Bahrain':'sunni',
+        'Jordan':'sunni','Syria':'sunni','Yemen':'sunni','Lebanon':'sunni','Oman':'ibadi',
+        'Albania':'sunni','Bosnia':'sunni','Kosovo':'sunni','Burkina Faso':'sunni','Gambia':'sunni','Guinea':'sunni',
+        'Guinea-Bissau':'sunni','Maldives':'sunni','Sierra Leone':'sunni','Western Sahara':'sunni','Palestine':'sunni',
+        'Iran':'shia','Iraq':'shia','Azerbaijan':'shia',
+        'Italy':'catholic','Spain':'catholic','France':'catholic','Portugal':'catholic','Poland':'catholic',
+        'Ireland':'catholic','Austria':'catholic','Croatia':'catholic','Slovenia':'catholic','Lithuania':'catholic',
+        'Philippines':'catholic','Brazil':'catholic','Mexico':'catholic','Colombia':'catholic','Argentina':'catholic',
+        'Peru':'catholic','Venezuela':'catholic','Chile':'catholic','Ecuador':'catholic','Bolivia':'catholic',
+        'Paraguay':'catholic','Uruguay':'catholic','Costa Rica':'catholic','Panama':'catholic',
+        'Dominican Republic':'catholic','Cuba':'catholic','Haiti':'catholic','Belgium':'catholic',
+        'Angola':'catholic','Cape Verde':'catholic','Equatorial Guinea':'catholic','Burundi':'catholic',
+        'Rwanda':'catholic','Seychelles':'catholic','São Tomé and Príncipe':'catholic','Malta':'catholic',
+        'Luxembourg':'catholic','Timor-Leste':'catholic','South Sudan':'catholic','Congo':'catholic','DR Congo':'catholic','Gabon':'catholic',
+        'Benin':'catholic','Togo':'catholic','Madagascar':'catholic','Mozambique':'catholic','Cameroon':'catholic',
+        'Guatemala':'catholic','Honduras':'catholic','El Salvador':'catholic','Nicaragua':'catholic','Puerto Rico':'catholic',
+        'Trinidad and Tobago':'catholic','Grenada':'catholic','Saint Lucia':'catholic',
+        'United Kingdom':'protestant','Germany':'protestant','Netherlands':'protestant','Sweden':'protestant',
+        'Norway':'protestant','Denmark':'protestant','Finland':'protestant','Iceland':'protestant',
+        'Switzerland':'protestant','United States':'protestant','Canada':'protestant',
+        'Australia':'protestant','New Zealand':'protestant','South Africa':'protestant',
+        'Nigeria':'protestant','Kenya':'protestant','Ghana':'protestant','Uganda':'protestant',
+        'Tanzania':'protestant','Zambia':'protestant','Zimbabwe':'protestant','Malawi':'protestant',
+        'Botswana':'protestant','Namibia':'protestant','Lesotho':'protestant','Eswatini':'protestant',
+        'Papua New Guinea':'protestant','Fiji':'protestant','Solomon Islands':'protestant','Vanuatu':'protestant',
+        'Samoa':'protestant','Tonga':'protestant','Jamaica':'protestant','Barbados':'protestant',
+        'Bahamas':'protestant','Guyana':'protestant','Suriname':'protestant','Belize':'protestant',
+        'South Korea':'protestant','Singapore':'protestant',
+        'Greenland':'protestant','Liberia':'protestant','Sierra Leone':'protestant','Central African Republic':'protestant',
+        'Russia':'orthodox','Greece':'orthodox','Ukraine':'orthodox','Romania':'orthodox','Serbia':'orthodox',
+        'Bulgaria':'orthodox','Belarus':'orthodox','Georgia':'orthodox','Cyprus':'orthodox','Armenia':'orthodox',
+        'Ethiopia':'orthodox','Eritrea':'orthodox','Moldova':'orthodox','Montenegro':'orthodox','North Macedonia':'orthodox',
+        'Latvia':'protestant','Estonia':'protestant','Czech Republic':'protestant','Slovakia':'catholic','Hungary':'catholic',
+        'India':'hindu','Nepal':'hindu','Mauritius':'hindu',
+        'Bhutan':'buddhist','Cambodia':'buddhist','Laos':'buddhist','Mongolia':'buddhist','Myanmar':'buddhist',
+        'Sri Lanka':'buddhist','Thailand':'buddhist',
+        'Israel':'jewish',
+        'China':'folk','Japan':'shinto','North Korea':'juche','Vietnam':'folk','Taiwan':'folk',
+        'Czechia':'catholic','W. Sahara':'sunni','Côte d\'Ivoire':'catholic','Ivory Coast':'catholic','Central African Rep.':'protestant','Dominican Rep.':'catholic',
+        'Bosnia and Herz.':'sunni','Eq. Guinea':'catholic','S. Sudan':'catholic','Solomon Is.':'protestant',
+        'United States of America':'protestant','Republic of the Congo':'catholic','Democratic Republic of the Congo':'catholic',
+        'Dem. Rep. Congo':'catholic','Somaliland':'sunni'
+    };
+
+    const religionColors = {muslim:'#1b7a3d',christian:'#3b6fb6',hindu:'#e87830',buddhist:'#d4a017',jewish:'#5b8ec9',other:'#7a7a8a',unknown:'#4a4a55'};
+    const denominationColors = {sunni:'#2d8a4e',shia:'#c44d34',ibadi:'#5fa872',catholic:'#5b7eb5',protestant:'#6b8fc9',orthodox:'#9b6fb0',hindu:'#e87830',buddhist:'#d4a017',jewish:'#5b8ec9',folk:'#a09070',shinto:'#c06050',juche:'#b05040',other:'#7a7a8a'};
+
+    const denominationArabic = {
+        'sunni':'سني','shia':'شيعي','ibadi':'إباضي',
+        'catholic':'كاثوليكي','protestant':'بروتستانتي','orthodox':'أرثوذكسي',
+        'hindu':'هندوسي','buddhist':'بوذي','jewish':'يهودي',
+        'folk':'ديانات شعبية','shinto':'شنتو','juche':'زوتشيه','other':'أخرى',
+        'muslim':'مسلم','christian':'مسيحي','unknown':'غير معروف'
+    };
+    const religionArabic = {
+        'muslim':'الإسلام','christian':'المسيحية','hindu':'الهندوسية',
+        'buddhist':'البوذية','jewish':'اليهودية','other':'أخرى','unknown':'غير معروف'
+    };
+
+    const elevationByCountry = {
+        'Afghanistan':1884,'Albania':708,'Algeria':800,'Andorra':1996,'Angola':1112,'Argentina':595,
+        'Armenia':1792,'Australia':330,'Austria':910,'Azerbaijan':384,'Bangladesh':85,'Belarus':160,
+        'Belgium':181,'Belize':173,'Benin':273,'Bhutan':3280,'Bolivia':1192,'Bosnia':500,'Botswana':1013,'Brazil':320,
+        'Brunei':478,'Bulgaria':472,'Burkina Faso':297,'Burundi':1504,'Cambodia':126,'Cameroon':667,
+        'Canada':487,'Cape Verde':362,'Central African Republic':635,'Chad':543,'Chile':1871,'China':1840,
+        'Colombia':593,'Comoros':480,'Congo':430,'Costa Rica':746,'Croatia':331,'Cuba':108,'Cyprus':91,
+        'Czech Republic':433,'DR Congo':726,'Denmark':34,'Djibouti':430,'Dominican Republic':424,
+        'Ecuador':1117,'Egypt':321,'El Salvador':442,'Equatorial Guinea':577,'Eritrea':853,'Estonia':61,
+        'Eswatini':305,'Ethiopia':1330,'Fiji':318,'Finland':164,'France':375,'Gabon':377,'Gambia':34,
+        'Georgia':1432,'Germany':263,'Ghana':190,'Greece':498,'Greenland':1792,'Guatemala':759,'Guinea':472,
+        'Guinea-Bissau':70,'Guyana':207,'Haiti':470,'Honduras':684,'Hungary':143,'Iceland':557,'India':621,
+        'Indonesia':367,'Iran':1305,'Iraq':312,'Ireland':118,'Israel':508,'Italy':538,'Jamaica':340,
+        'Japan':438,'Jordan':812,'Kazakhstan':387,'Kenya':762,'Kuwait':108,'Kyrgyzstan':2988,'Laos':710,
+        'Latvia':87,'Lebanon':1250,'Lesotho':2161,'Liberia':243,'Libya':423,'Lithuania':110,'Luxembourg':325,
+        'Madagascar':615,'Malawi':779,'Malaysia':538,'Maldives':2,'Mali':343,'Malta':68,'Mauritania':276,
+        'Mauritius':134,'Mexico':1111,'Moldova':147,'Mongolia':1528,'Montenegro':1086,'Morocco':909,
+        'Mozambique':345,'Myanmar':702,'Namibia':1141,'Nepal':3265,'Netherlands':30,'New Zealand':388,
+        'Nicaragua':298,'Niger':474,'Nigeria':380,'North Korea':573,'North Macedonia':741,'Norway':460,
+        'Oman':310,'Pakistan':900,'Panama':360,'Papua New Guinea':667,'Paraguay':178,'Peru':1555,'Philippines':442,
+        'Poland':173,'Portugal':372,'Qatar':28,'Romania':414,'Russia':373,'Rwanda':1598,'Saudi Arabia':665,
+        'Senegal':69,'Serbia':473,'Sierra Leone':279,'Slovakia':458,'Slovenia':492,'Somalia':410,
+        'Somaliland':800,'South Africa':1034,'South Korea':282,'South Sudan':430,'Spain':660,'Sri Lanka':228,'Sudan':568,
+        'Suriname':246,'Sweden':320,'Switzerland':1350,'Syria':514,'Tajikistan':3186,'Tanzania':1018,
+        'Thailand':287,'Timor-Leste':672,'Togo':236,'Trinidad and Tobago':83,'Tunisia':246,'Turkey':1132,
+        'Turkmenistan':230,'Uganda':1100,'Ukraine':175,'United Arab Emirates':149,'United Kingdom':162,
+        'United States':760,'Uruguay':109,'Uzbekistan':450,'Vanuatu':398,'Venezuela':450,'Vietnam':398,
+        'Yemen':999,'Zambia':1138,'Zimbabwe':961,'Kosovo':800,'Western Sahara':256,'Czechia':433,
+        'W. Sahara':256,'Côte d\'Ivoire':250,'Ivory Coast':250,'Central African Rep.':635,'Dominican Rep.':424,
+        'Bosnia and Herz.':500,'Eq. Guinea':577,'S. Sudan':430,'Solomon Is.':310,
+        'United States of America':760,'Republic of the Congo':430,'Democratic Republic of the Congo':726,
+        'Dem. Rep. Congo':726
+    };
+
+    const densityByCountry = {
+        'Afghanistan':60,'Albania':105,'Algeria':18,'Angola':26,'Argentina':17,'Armenia':104,'Australia':3,
+        'Austria':109,'Azerbaijan':123,'Bahrain':2235,'Bangladesh':1265,'Belarus':46,'Belgium':383,
+        'Belize':17,'Benin':108,'Bhutan':21,'Bolivia':11,'Bosnia':64,'Botswana':4,'Brazil':25,
+        'Brunei':83,'Bulgaria':64,'Burkina Faso':79,'Burundi':463,'Cambodia':95,'Cameroon':56,
+        'Canada':4,'Cape Verde':148,'Central African Republic':8,'Chad':13,'Chile':26,'China':150,
+        'Colombia':46,'Comoros':467,'Congo':16,'Costa Rica':100,'Croatia':71,'Cuba':102,'Cyprus':131,
+        'Czech Republic':137,'DR Congo':40,'Denmark':137,'Djibouti':43,'Dominican Republic':225,
+        'Ecuador':71,'Egypt':103,'El Salvador':313,'Equatorial Guinea':53,'Eritrea':35,'Estonia':31,
+        'Eswatini':70,'Ethiopia':115,'Fiji':49,'Finland':18,'France':119,'Gabon':9,'Gambia':239,
+        'Georgia':54,'Germany':240,'Ghana':137,'Greece':80,'Greenland':0.03,'Guatemala':167,'Guinea':55,
+        'Guinea-Bissau':71,'Guyana':4,'Haiti':414,'Honduras':89,'Hungary':106,'Iceland':3,'India':464,
+        'Indonesia':151,'Iran':52,'Iraq':93,'Ireland':72,'Israel':426,'Italy':206,'Jamaica':273,
+        'Japan':347,'Jordan':115,'Kazakhstan':7,'Kenya':94,'Kuwait':240,'Kyrgyzstan':35,'Laos':32,
+        'Latvia':30,'Lebanon':667,'Lesotho':71,'Liberia':53,'Libya':4,'Lithuania':43,'Luxembourg':250,
+        'Madagascar':48,'Malawi':203,'Malaysia':99,'Maldives':1802,'Mali':18,'Malta':1510,'Mauritania':5,
+        'Mauritius':626,'Mexico':66,'Moldova':123,'Mongolia':2,'Montenegro':47,'Morocco':83,'Mozambique':40,
+        'Myanmar':83,'Namibia':3,'Nepal':210,'Netherlands':508,'New Zealand':19,'Nicaragua':55,'Niger':20,
+        'Nigeria':229,'North Korea':215,'North Macedonia':83,'Norway':15,'Oman':16,'Pakistan':287,
+        'Panama':58,'Papua New Guinea':20,'Paraguay':18,'Peru':26,'Philippines':368,'Poland':123,
+        'Portugal':111,'Qatar':240,'Romania':82,'Russia':9,'Rwanda':525,'Saudi Arabia':16,'Senegal':89,
+        'Serbia':80,'Sierra Leone':111,'Singapore':8358,'Slovakia':113,'Slovenia':103,'Somalia':25,
+        'Somaliland':25,'South Africa':49,'South Korea':527,'South Sudan':18,'Spain':95,'Sri Lanka':341,'Sudan':25,
+        'Suriname':4,'Sweden':25,'Switzerland':219,'Syria':95,'Taiwan':673,'Tajikistan':68,'Tanzania':67,
+        'Thailand':137,'Timor-Leste':89,'Togo':152,'Tonga':146,'Trinidad and Tobago':266,'Tunisia':76,
+        'Turkey':110,'Turkmenistan':13,'Uganda':229,'Ukraine':73,'United Arab Emirates':99,'United Kingdom':277,
+        'United States':36,'Uruguay':19,'Uzbekistan':79,'Vanuatu':23,'Venezuela':32,'Vietnam':308,
+        'Yemen':56,'Zambia':25,'Zimbabwe':43,'Kosovo':168,'Western Sahara':2,'Czechia':137,
+        'W. Sahara':2,'Côte d\'Ivoire':83,'Ivory Coast':83,'Central African Rep.':8,'Dominican Rep.':225,
+        'Bosnia and Herz.':64,'Eq. Guinea':53,'S. Sudan':18,'Solomon Is.':22,
+        'United States of America':36,'Republic of the Congo':16,'Democratic Republic of the Congo':40,
+        'Dem. Rep. Congo':40
+    };
+
+    const precipitationByCountry = {
+        'Afghanistan':327,'Albania':1485,'Algeria':89,'Angola':1010,'Argentina':591,'Armenia':527,'Australia':534,
+        'Austria':1110,'Azerbaijan':478,'Bangladesh':2666,'Belarus':618,'Belgium':847,'Benin':1032,'Bhutan':1928,
+        'Bolivia':1146,'Bosnia':1028,'Botswana':403,'Brazil':1761,'Brunei':2722,'Bulgaria':608,'Burkina Faso':748,
+        'Burundi':1274,'Cambodia':1904,'Cameroon':1604,'Canada':537,'Cape Verde':261,'Central African Republic':1484,
+        'Chad':322,'Chile':715,'China':627,'Colombia':2612,'Comoros':1539,'Congo':1496,'Costa Rica':2926,'Croatia':1113,
+        'Cuba':1335,'Cyprus':498,'Czech Republic':677,'DR Congo':1543,'Denmark':703,'Djibouti':220,'Dominican Republic':1410,
+        'Ecuador':2274,'Egypt':51,'El Salvador':1724,'Equatorial Guinea':2080,'Eritrea':372,'Estonia':626,
+        'Eswatini':788,'Ethiopia':848,'Fiji':2032,'Finland':536,'France':867,'Gabon':1831,'Gambia':836,
+        'Georgia':1026,'Germany':700,'Ghana':1187,'Greece':652,'Greenland':550,'Guatemala':1996,'Guinea':1651,
+        'Guinea-Bissau':1576,'Guyana':2200,'Haiti':1440,'Honduras':1976,'Hungary':589,'Iceland':1077,'India':1083,
+        'Indonesia':2702,'Iran':228,'Iraq':216,'Ireland':1118,'Israel':435,'Italy':832,'Jamaica':1982,
+        'Japan':1530,'Jordan':111,'Kazakhstan':250,'Kenya':630,'Kiribati':1740,'Kuwait':121,'Kyrgyzstan':533,
+        'Laos':1830,'Latvia':667,'Lebanon':661,'Lesotho':749,'Liberia':2391,'Libya':56,'Lithuania':656,
+        'Luxembourg':850,'Madagascar':1513,'Malawi':1181,'Malaysia':2875,'Maldives':1972,'Mali':282,'Malta':525,
+        'Mauritania':92,'Mauritius':2048,'Mexico':752,'Moldova':565,'Mongolia':241,'Montenegro':1338,'Morocco':346,
+        'Mozambique':1032,'Myanmar':2341,'Namibia':285,'Nepal':1800,'Netherlands':778,'New Zealand':1732,
+        'Nicaragua':2280,'Niger':186,'Nigeria':1150,'North Korea':1054,'North Macedonia':680,'Norway':1414,
+        'Oman':125,'Pakistan':494,'Palau':3735,'Palestine':402,'Panama':2692,'Papua New Guinea':3126,'Paraguay':1270,
+        'Peru':1738,'Philippines':2548,'Poland':600,'Portugal':854,'Qatar':74,'Romania':637,'Russia':460,
+        'Rwanda':1212,'Saudi Arabia':59,'Senegal':686,'Serbia':773,'Sierra Leone':2396,'Singapore':2342,
+        'Slovakia':774,'Slovenia':1162,'Solomon Islands':3028,'Somalia':282,'Somaliland':300,'South Africa':495,'South Korea':1274,
+        'South Sudan':900,'Spain':636,'Sri Lanka':1712,'Sudan':416,'Suriname':2331,'Sweden':624,'Switzerland':1537,
+        'Syria':252,'Tajikistan':473,'Tanzania':1071,'Thailand':1622,'Timor-Leste':1486,'Togo':1168,'Tonga':1746,
+        'Trinidad and Tobago':1980,'Tunisia':310,'Turkey':593,'Turkmenistan':161,'Tuvalu':3124,'Uganda':1180,
+        'Ukraine':565,'United Arab Emirates':78,'United Kingdom':1220,'United States':715,'Uruguay':1265,
+        'Uzbekistan':206,'Vanuatu':2218,'Venezuela':2044,'Vietnam':1821,'Yemen':127,'Zambia':1020,'Zimbabwe':657,
+        'Kosovo':810,'Western Sahara':50,'Puerto Rico':1709,'Samoa':2950,'São Tomé and Príncipe':2175,
+        'Seychelles':1860,'Saint Lucia':1870,'Grenada':1920,'Barbados':1350,'Bahamas':1118,'Belize':1840,
+        'Suriname':2331,'Guyana':2200,'Czechia':677,'W. Sahara':50,'Côte d\'Ivoire':1348,'Ivory Coast':1348,
+        'Central African Rep.':1484,'Dominican Rep.':1410,'Bosnia and Herz.':1028,'Eq. Guinea':2080,'S. Sudan':900,'Solomon Is.':3028,
+        'United States of America':715,'Republic of the Congo':1496,'Democratic Republic of the Congo':1543,
+        'Dem. Rep. Congo':1543
+    };
+
+    const tempByCountry = {
+        'Canada':-5,'Russia':-4,'Finland':2,'Sweden':3,'Norway':2,'Iceland':1,'Greenland':-10,'United States':10,
+        'China':9,'Japan':12,'India':25,'Saudi Arabia':28,'Egypt':24,'Brazil':25,'Argentina':15,'South Africa':18,
+        'Australia':22,'United Kingdom':9,'France':11,'Germany':9,'Italy':15,'Spain':16,'Nigeria':27,'Kenya':22,
+        'Morocco':19,'Algeria':22,'Indonesia':26,'Thailand':28,'Mexico':21,'Peru':16,'Chile':13,'Colombia':24,
+        'New Zealand':12,'Congo':25,'Sudan':29,'Ethiopia':20,
+        'United States of America':10,'Republic of the Congo':25,'Democratic Republic of the Congo':25,
+        'Dem. Rep. Congo':25,'Somaliland':28
+    };
+
+    function getCleanName(rawName) {
+        if (!rawName) return '';
+        return rawName
+            .replace(/^(Islamic Republic of|Republic of|State of|Kingdom of|Federal Republic of|Democratic Republic of|Commonwealth of|People's Republic of|United States of America|United Kingdom of Great Britain and Northern Ireland)\s+/i, '')
+            .replace(/\s*\(.*\)\s*/g, '')
+            .replace(/^Rep\.\s*/i, '')
+            .trim();
+    }
+
+    function getArabicName(enName) {
+        if (!enName) return '';
+        let clean = getCleanName(enName);
+        if (arabicNames[clean]) return arabicNames[clean];
+        if (arabicNames[enName]) return arabicNames[enName];
+        for (let [k, v] of Object.entries(arabicNames))
+            if (clean.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(clean.toLowerCase())) return v;
+        return enName;
+    }
+
+    function getReligion(name) {
+        if (!name) return 'unknown';
+        if (religionByCountry[name]) return religionByCountry[name];
+        const clean = getCleanName(name);
+        if (religionByCountry[clean]) return religionByCountry[clean];
+        for (let [k, v] of Object.entries(religionByCountry))
+            if (clean.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(clean.toLowerCase())) return v;
+        return 'unknown';
+    }
+
+    function getDenomination(name) {
+        if (!name) return getReligion(name);
+        if (denominationByCountry[name]) return denominationByCountry[name];
+        const clean = getCleanName(name);
+        if (denominationByCountry[clean]) return denominationByCountry[clean];
+        for (let [k, v] of Object.entries(denominationByCountry))
+            if (clean.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(clean.toLowerCase())) return v;
+        return getReligion(name);
+    }
+
+    function getElevation(name) {
+        if (!name) return null;
+        if (elevationByCountry[name] !== undefined) return elevationByCountry[name];
+        const clean = getCleanName(name);
+        if (elevationByCountry[clean] !== undefined) return elevationByCountry[clean];
+        return Math.round(500 + Math.random() * 300);
+    }
+
+    function getDensity(name) {
+        if (!name) return null;
+        if (densityByCountry[name] !== undefined) return densityByCountry[name];
+        const clean = getCleanName(name);
+        if (densityByCountry[clean] !== undefined) return densityByCountry[clean];
+        for (let [k, v] of Object.entries(densityByCountry))
+            if (clean.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(clean.toLowerCase())) return v;
+        return 50;
+    }
+
+    function getPrecipitation(name) {
+        if (!name) return null;
+        if (precipitationByCountry[name] !== undefined) return precipitationByCountry[name];
+        const clean = getCleanName(name);
+        if (precipitationByCountry[clean] !== undefined) return precipitationByCountry[clean];
+        const feature = allCountryFeatures.find(f => f.properties?.name === name || getCleanName(f.properties?.name) === clean);
+        if (feature && feature.geometry) {
+            const centroid = d3.geoCentroid(feature);
+            if (centroid && !isNaN(centroid[1])) {
+                const lat = Math.abs(centroid[1]);
+                let estimate = 2000 - 1800 * lat / 60;
+                if (lat < 23 && centroid[0] > -20 && centroid[0] < 50) estimate = 100;
+                if (lat < 25 && centroid[0] > 35 && centroid[0] < 55) estimate = 100;
+                if (lat > 60) estimate = 500;
+                return Math.round(estimate);
+            }
+        }
+        return 800;
+    }
+
+    function getTemperature(name, d) {
+        if (!name) return null;
+        if (tempByCountry[name] !== undefined) return tempByCountry[name];
+        const clean = getCleanName(name);
+        if (tempByCountry[clean] !== undefined) return tempByCountry[clean];
+        if (d && d.geometry) {
+            const centroid = d3.geoCentroid(d);
+            if (centroid && !isNaN(centroid[1])) {
+                const lat = Math.abs(centroid[1]);
+                let est = 28 - lat * 0.8;
+                if (lat > 60) est = 28 - 60*0.8 - (lat-60)*1.2;
+                if (lat > 80) est = -20;
+                return Math.round(est);
+            }
+        }
+        return null;
+    }
+
+    function getTerrainColor(elev) {
+        if (elev == null || isNaN(elev)) return '#5a5a60';
+        if (elev < 0) return '#2d6a4f'; if (elev < 50) return '#4c8c3a'; if (elev < 200) return '#6ba33d';
+        if (elev < 400) return '#8db840'; if (elev < 700) return '#c4a840'; if (elev < 1200) return '#c48440';
+        if (elev < 2000) return '#a06030'; if (elev < 3000) return '#7a4030'; if (elev < 4000) return '#5a3035';
+        return '#e8e0d8';
+    }
+    function getDensityColor(dens) {
+        if (dens == null || isNaN(dens)) return '#5a5a60';
+        if (dens < 1) return '#f5f0e6'; if (dens < 10) return '#e0d8c0'; if (dens < 50) return '#c8b880';
+        if (dens < 100) return '#b09860'; if (dens < 200) return '#a07840'; if (dens < 500) return '#c04030';
+        if (dens < 1000) return '#b02020'; return '#7a1020';
+    }
+    function getPrecipitationColor(prec) {
+        if (prec == null || isNaN(prec)) return '#5a5a60';
+        if (prec < 100) return '#d4a85c'; if (prec < 300) return '#e0c070'; if (prec < 600) return '#a8d08d';
+        if (prec < 1000) return '#6ab04c'; if (prec < 1500) return '#4a9c3f'; if (prec < 2000) return '#3b8cc7';
+        if (prec < 3000) return '#2c5f8a'; return '#1a3d5c';
+    }
+    function getTempColor(temp) {
+        if (temp == null || isNaN(temp)) return '#5a5a60';
+        if (temp < -10) return '#e0e0ff'; if (temp < 0) return '#b0c4de'; if (temp < 10) return '#87ceeb';
+        if (temp < 15) return '#98fb98'; if (temp < 20) return '#ffd700'; if (temp < 25) return '#ffa500';
+        if (temp < 30) return '#ff6347'; return '#b22222';
+    }
+
+    function getCountryFill(d) {
+        const name = d.properties?.name || '';
+        if (colorMode === 'normal') return '#d4c5a0';
+        if (colorMode === 'terrain') return getTerrainColor(getElevation(name));
+        if (colorMode === 'density') return getDensityColor(getDensity(name));
+        if (colorMode === 'precipitation') return getPrecipitationColor(getPrecipitation(name));
+        if (colorMode === 'temperature') return getTempColor(getTemperature(name, d));
+        if (sectMode) return denominationColors[getDenomination(name)] || '#4a4a55';
+        const rel = getReligion(name);
+        if (currentReligionFilter === 'all') return religionColors[rel] || '#4a4a55';
+        if (rel === currentReligionFilter) return d3.color(religionColors[rel] || '#4a4a55').brighter(0.6).toString();
+        return 'rgba(60,60,70,0.25)';
+    }
+    function getStroke(d) {
+        if (colorMode === 'normal') return 'rgba(255,255,255,0.5)';
+        const name = d.properties?.name || '';
+        if (currentReligionFilter !== 'all' && getReligion(name) === currentReligionFilter) return '#fff';
+        return 'rgba(255,255,255,0.4)';
+    }
+    function getStrokeWidth(d) {
+        return 0.8;
+    }
+    function getOpacity(d) {
+        if (colorMode === 'normal') return 0.95;
+        if (currentReligionFilter === 'all') return 0.9;
+        return (getReligion(d.properties?.name || '') === currentReligionFilter) ? 1 : 0.35;
+    }
+
+    function getCorridorColor() {
+        if (colorMode === 'terrain') return '#ffeb3b'; if (colorMode === 'density') return '#00e5ff';
+        if (colorMode === 'precipitation') return '#00e5ff'; if (colorMode === 'temperature') return '#00ffcc';
+        if (colorMode === 'normal') return '#ff1744';
+        return '#ff9100';
+    }
+
+    const corridorsData = [
+        {name_ar:'مضيق هرمز',name_en:'Strait of Hormuz',type:'sea',coords:[[56.0,26.5],[56.3,26.2],[56.5,25.8]]},
+        {name_ar:'مضيق ملقا',name_en:'Strait of Malacca',type:'sea',coords:[[101.5,2.8],[102.0,2.5],[102.5,2.2]]},
+        {name_ar:'قناة السويس',name_en:'Suez Canal',type:'sea',coords:[[32.5,31.2],[32.4,30.5],[32.3,29.8]]},
+        {name_ar:'قناة بنما',name_en:'Panama Canal',type:'sea',coords:[[-79.9,9.1],[-79.8,9.0],[-79.7,8.9],[-79.6,8.8]]},
+        {name_ar:'مضيق جبل طارق',name_en:'Strait of Gibraltar',type:'sea',coords:[[-5.5,36.0],[-5.3,35.9],[-5.1,35.8]]},
+        {name_ar:'مضيق البوسفور',name_en:'Bosporus',type:'sea',coords:[[29.0,41.1],[29.1,41.0],[29.2,41.0]]},
+        {name_ar:'مضيق باب المندب',name_en:'Bab el-Mandeb',type:'sea',coords:[[43.3,12.6],[43.4,12.5],[43.5,12.4]]},
+        {name_ar:'طريق الحرير',name_en:'Silk Road',type:'land',coords:[[108,34],[102,38],[96,40],[88,42],[75,40],[68,39],[60,35],[55,33]]}
+    ];
+
+    const mountainRanges = [
+        {name:'هملايا', coords:[[73,35],[80,32],[85,28],[88,27],[92,28],[95,29]]},
+        {name:'أنديز', coords:[[-70,-18],[-68,-25],[-67,-33],[-70,-40],[-72,-47],[-74,-53]]},
+        {name:'روكي', coords:[[-120,50],[-115,45],[-110,40],[-106,35],[-105,30]]},
+        {name:'الألب', coords:[[5,44],[7,46],[8,47],[10,47],[13,46]]},
+        {name:'الأطلس', coords:[[-10,31],[-5,31],[0,32],[5,33],[10,33]]},
+        {name:'زاغروس', coords:[[44,34],[46,33],[48,31],[50,29],[52,28]]},
+        {name:'الأورال', coords:[[60,55],[62,58],[60,62],[59,66],[62,68]]},
+        {name:'غاتس الغربية', coords:[[73,20],[74,18],[75,15],[76,12],[77,10]]},
+        {name:'الأبالاش', coords:[[-85,35],[-82,38],[-78,40],[-75,42],[-73,44]]}
+    ];
+
+    const rivers = [
+        {name:'النيل', coords:[[30,2],[32,5],[33,10],[31,15],[31,20],[31,25],[31,30]]},
+        {name:'النيل الأزرق', coords:[[35,10],[33,11],[32,12],[31,15]]},
+        {name:'النيل الأبيض', coords:[[30,2],[31,5],[32,8],[31,15]]},
+        {name:'الأمازون', coords:[[-70,-5],[-65,-3],[-60,-3],[-55,-2],[-50,-1],[-48,0]]},
+        {name:'ريو نيغرو', coords:[[-66,0],[-63,-1],[-60,-3]]},
+        {name:'ماديرا', coords:[[-63,-8],[-62,-5],[-60,-3]]},
+        {name:'المسيسيبي', coords:[[-95,30],[-92,33],[-90,35],[-88,37],[-90,40],[-92,43]]},
+        {name:'ميزوري', coords:[[-105,45],[-100,42],[-95,40],[-92,38],[-90,35]]},
+        {name:'اليانغتسي', coords:[[105,30],[108,31],[110,32],[115,31],[120,32]]},
+        {name:'الدانوب', coords:[[10,48],[14,47],[18,46],[22,45],[26,44],[30,44]]},
+        {name:'الغانج', coords:[[78,30],[80,28],[82,26],[85,25],[88,23],[90,22]]},
+        {name:'النيجر', coords:[[-10,10],[-5,12],[0,14],[5,15],[8,12],[6,5]]},
+        {name:'الكونغو', coords:[[15,-5],[18,-3],[20,-1],[22,2],[24,0],[25,-2]]},
+        {name:'الفولغا', coords:[[35,52],[40,50],[45,48],[48,46],[50,44]]},
+        {name:'السند', coords:[[72,35],[70,33],[68,30],[67,28],[68,25]]}
+    ];
+
+    const densitySpots = [
+        {name:'طوكيو',coords:[139.7,35.7],density:16000},{name:'أوساكا',coords:[135.5,34.7],density:12000},
+        {name:'سيول',coords:[127.0,37.6],density:17000},{name:'بوسان',coords:[129.1,35.1],density:4500},
+        {name:'شنغهاي',coords:[121.5,31.2],density:4000},{name:'بكين',coords:[116.4,39.9],density:1300},
+        {name:'غوانزو',coords:[113.3,23.1],density:2000},{name:'شنتشن',coords:[114.1,22.5],density:3000},
+        {name:'تايبيه',coords:[121.5,25.0],density:6700},{name:'هونغ كونغ',coords:[114.2,22.3],density:7000},
+        {name:'نانجينغ',coords:[118.8,32.0],density:1200},{name:'تشينغداو',coords:[120.4,36.1],density:1100},
+        {name:'تشانغشا',coords:[113.0,28.2],density:800},{name:'ووهان',coords:[114.3,30.6],density:1100},
+        {name:'سنغافورة',coords:[103.8,1.3],density:8358},
+        {name:'دلهي',coords:[77.2,28.6],density:11000},{name:'مومباي',coords:[72.8,19.0],density:21000},
+        {name:'كلكتا',coords:[88.4,22.6],density:24000},{name:'بنغالور',coords:[77.6,12.9],density:4400},
+        {name:'تشيناي',coords:[80.3,13.1],density:6000},{name:'حيدر أباد',coords:[78.5,17.4],density:3700},
+        {name:'أحمد أباد',coords:[72.6,23.0],density:3500},{name:'بونه',coords:[73.9,18.5],density:2800},
+        {name:'كراتشي',coords:[67.0,24.9],density:24000},{name:'لاهور',coords:[74.4,31.5],density:11000},
+        {name:'داكا',coords:[90.4,23.7],density:23000},{name:'كاتماندو',coords:[85.3,27.7],density:20000},
+        {name:'إسلام أباد',coords:[73.0,33.7],density:2000},{name:'فيصل أباد',coords:[73.1,31.4],density:900},
+        {name:'جاكرتا',coords:[106.8,-6.2],density:15000},{name:'مانيلا',coords:[121.0,14.6],density:42000},
+        {name:'بانكوك',coords:[100.5,13.7],density:5300},{name:'هوشي منه',coords:[106.7,10.8],density:4000},
+        {name:'هانوي',coords:[105.8,21.0],density:2300},{name:'يانغون',coords:[96.1,16.8],density:1200},
+        {name:'القاهرة',coords:[31.2,30.0],density:19000},{name:'طهران',coords:[51.4,35.7],density:11000},
+        {name:'بغداد',coords:[44.4,33.3],density:12000},{name:'الرياض',coords:[46.7,24.7],density:3600},
+        {name:'إسطنبول',coords:[28.9,41.0],density:2800},{name:'دبي',coords:[55.3,25.2],density:4000},
+        {name:'القدس',coords:[35.2,31.8],density:4500},{name:'جدة',coords:[39.2,21.5],density:2000},
+        {name:'أبو ظبي',coords:[54.4,24.5],density:1200},
+        {name:'لاغوس',coords:[3.4,6.5],density:8000},{name:'كينشاسا',coords:[15.3,-4.3],density:13000},
+        {name:'نيروبي',coords:[36.8,-1.3],density:4800},{name:'جوهانسبرغ',coords:[28.0,-26.2],density:2700},
+        {name:'أديس أبابا',coords:[38.7,9.0],density:5000},{name:'دار السلام',coords:[39.2,-6.8],density:3500},
+        {name:'أبيدجان',coords:[-4.0,5.3],density:1200},{name:'داكار',coords:[-17.4,14.7],density:4500},
+        {name:'لواندا',coords:[13.2,-8.8],density:1500},{name:'الخرطوم',coords:[32.5,15.5],density:2000},
+        {name:'مقديشو',coords:[45.3,2.0],density:3000},{name:'أكرا',coords:[-0.2,5.6],density:2800},
+        {name:'لندن',coords:[-0.1,51.5],density:5500},{name:'باريس',coords:[2.3,48.8],density:4000},
+        {name:'موسكو',coords:[37.6,55.7],density:4900},{name:'مدريد',coords:[-3.7,40.4],density:5300},
+        {name:'برلين',coords:[13.4,52.5],density:3900},{name:'روما',coords:[12.5,41.9],density:2200},
+        {name:'برشلونة',coords:[2.2,41.4],density:1600},{name:'أثينا',coords:[23.7,38.0],density:1100},
+        {name:'وارسو',coords:[21.0,52.2],density:1500},{name:'فيينا',coords:[16.4,48.2],density:1900},
+        {name:'نيويورك',coords:[-74.0,40.7],density:10000},{name:'لوس أنجلوس',coords:[-118.2,34.0],density:3200},
+        {name:'مكسيكو',coords:[-99.1,19.4],density:6000},{name:'شيكاغو',coords:[-87.6,41.8],density:4600},
+        {name:'تورنتو',coords:[-79.4,43.7],density:4300},{name:'فانكوفر',coords:[-123.1,49.2],density:5400},
+        {name:'ميامي',coords:[-80.2,25.8],density:2000},{name:'هيوستن',coords:[-95.4,29.8],density:1500},
+        {name:'ساو باولو',coords:[-46.6,-23.5],density:8000},{name:'ريو دي جانيرو',coords:[-43.2,-22.9],density:5000},
+        {name:'ليما',coords:[-77.0,-12.0],density:3500},{name:'بوغوتا',coords:[-74.1,4.6],density:4000},
+        {name:'بوينس آيرس',coords:[-58.4,-34.6],density:3000},{name:'سانتياغو',coords:[-70.6,-33.4],density:2100},
+        {name:'سيدني',coords:[151.2,-33.9],density:400},{name:'ملبورن',coords:[145.0,-37.8],density:500},
+        {name:'بريزبن',coords:[153.0,-27.5],density:150},{name:'أوكلاند',coords:[174.8,-36.8],density:400}
+    ];
+
+    const timezones = [
+        {offset:-12, coords:[[-180,90],[180,90],[180,-90],[-180,-90]]},
+        {offset:-11, coords:[[-165,90],[-150,90],[-150,-90],[-165,-90]]},
+        {offset:-10, coords:[[-150,90],[-135,90],[-135,-90],[-150,-90]]},
+        {offset:-9, coords:[[-135,90],[-120,90],[-120,-90],[-135,-90]]},
+        {offset:-8, coords:[[-120,90],[-105,90],[-105,-90],[-120,-90]]},
+        {offset:-7, coords:[[-105,90],[-90,90],[-90,-90],[-105,-90]]},
+        {offset:-6, coords:[[-90,90],[-75,90],[-75,-90],[-90,-90]]},
+        {offset:-5, coords:[[-75,90],[-60,90],[-60,-90],[-75,-90]]},
+        {offset:-4, coords:[[-60,90],[-45,90],[-45,-90],[-60,-90]]},
+        {offset:-3, coords:[[-45,90],[-30,90],[-30,-90],[-45,-90]]},
+        {offset:-2, coords:[[-30,90],[-15,90],[-15,-90],[-30,-90]]},
+        {offset:-1, coords:[[-15,90],[0,90],[0,-90],[-15,-90]]},
+        {offset:0, coords:[[0,90],[15,90],[15,-90],[0,-90]]},
+        {offset:1, coords:[[15,90],[30,90],[30,-90],[15,-90]]},
+        {offset:2, coords:[[30,90],[45,90],[45,-90],[30,-90]]},
+        {offset:3, coords:[[45,90],[60,90],[60,-90],[45,-90]]},
+        {offset:4, coords:[[60,90],[75,90],[75,-90],[60,-90]]},
+        {offset:5, coords:[[75,90],[90,90],[90,-90],[75,-90]]},
+        {offset:6, coords:[[90,90],[105,90],[105,-90],[90,-90]]},
+        {offset:7, coords:[[105,90],[120,90],[120,-90],[105,-90]]},
+        {offset:8, coords:[[120,90],[135,90],[135,-90],[120,-90]]},
+        {offset:9, coords:[[135,90],[150,90],[150,-90],[135,-90]]},
+        {offset:10, coords:[[150,90],[165,90],[165,-90],[150,-90]]},
+        {offset:11, coords:[[165,90],[180,90],[180,-90],[165,-90]]},
+        {offset:12, coords:[[180,90],[-180,90],[-180,-90],[180,-90]]}
+    ];
+
+    function getSpotColor(density) {
+        if (density > 10000) return '#ff5252';
+        if (density > 4000) return '#ff9800';
+        return '#ffeb3b';
+    }
+
+    function getContainerDimensions() { const r=mapContainer.getBoundingClientRect(); return {width:r.width, height:r.height}; }
+    function setupProjection(w,h) { return d3.geoPolyhedralWaterman().scale(Math.min(w,h)*0.38).translate([w/2,h/2]).rotate([0,0]).precision(0.3); }
+
+    function createSvg() {
+        const {width, height} = getContainerDimensions();
+        svgEl.setAttribute('viewBox', `0 0 ${width} ${height}`); svgEl.setAttribute('width', width); svgEl.setAttribute('height', height);
+        svg = d3.select(svgEl); svg.selectAll('*').remove();
+        const defs = svg.append('defs');
+        defs.append('radialGradient').attr('id','oceanGradient').attr('cx','50%').attr('cy','50%').attr('r','60%')
+            .selectAll('stop').data([{o:0,c:'#1e3048'},{o:100,c:'#0d1520'}]).join('stop').attr('offset',d=>d.o+'%').attr('stop-color',d=>d.c);
+        gOcean = svg.append('g'); gOcean.append('rect').attr('x',-500).attr('y',-500).attr('width',width+1000).attr('height',height+1000).attr('fill','url(#oceanGradient)');
+        gGraticule = svg.append('g'); gCountries = svg.append('g'); gPhysical = svg.append('g'); gCorridors = svg.append('g'); gTemperature = svg.append('g');
+        gCapitals = svg.append('g'); gTimezones = svg.append('g');
+        gMap = svg.append('g').attr('class', 'map-transform-group');
+        [gOcean, gGraticule, gCountries, gPhysical, gCorridors, gTemperature, gCapitals, gTimezones].forEach(g => gMap.append(() => g.node()));
+        projection = setupProjection(width, height); pathGen = d3.geoPath(projection);
+    }
+
     // ========== دوال مساعدة لحجم التسميات حسب التكبير والشاشة ==========
     function getLabelFontSize() {
         const base = 7;
