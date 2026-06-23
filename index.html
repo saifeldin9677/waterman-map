@@ -69,6 +69,8 @@
         .coordinates-display{display:none;}
         .copy-notification{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(46,125,50,0.9);color:#fff;padding:4px 14px;border-radius:16px;font-size:0.7em;z-index:200;opacity:0;transition:opacity 0.3s ease;pointer-events:none;}
         .copy-notification.show{opacity:1;}
+        
+        /* تحسينات الجوال */
         @media(max-width:768px){
             .header h1{font-size:0.8em;}
             .btn{padding:3px 6px;font-size:0.55em;border-radius:10px;}
@@ -165,6 +167,50 @@
         .controls-bar .control-label,
         .controls-bar .divider {
             display: none;
+        }
+
+        /* === تحسينات حصرية للجوال === */
+        @media (max-width: 768px) {
+            .controls-bar {
+                width: 95vw;
+                max-width: 95vw;
+                bottom: 10px;
+                padding: 12px 10px;
+                max-height: 70vh;
+                border-radius: 20px;
+            }
+            .controls-bar .row {
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 6px;
+            }
+            .controls-bar .row-label {
+                display: none; /* إخفاء التصنيفات لتوفير مساحة */
+            }
+            .controls-bar .btn {
+                font-size: 0.75em;
+                padding: 8px 10px;
+                min-height: 36px;
+                border-radius: 20px;
+                flex: 0 1 auto;
+            }
+            .controls-bar .search-box input {
+                width: 80px;
+                font-size: 0.7em;
+                padding: 6px 10px;
+            }
+            .menu-toggle {
+                width: 56px;
+                height: 56px;
+                font-size: 2em;
+                bottom: 100px;
+                right: 16px;
+            }
+            .zoom-btn {
+                width: 32px;
+                height: 32px;
+                font-size: 1.2em;
+            }
         }
 
         .country-label {
@@ -1498,24 +1544,27 @@
         projection = setupProjection(width, height); pathGen = d3.geoPath(projection);
     }
 
-    // ========== الدالة المعدلة: حجم يتغير عكسياً مع التكبير ليظل ثابتاً بالنسبة للشاشة ==========
+    // ========== الدالة المعدلة: حجم النسبي للشاشة (يعاكس التكبير) ==========
     function getLabelFontSize() {
-        const baseSize = 8; // الحجم الأساسي عند مستوى التكبير 1x (مرئي للعين)
+        const baseSize = 7; // الحجم الأساسي المرئي في مستوى التكبير 1x
         const zoom = currentTransform.k || 1;
-        // الحجم يتغير عكسياً: كلما زاد التكبير صغر الخط ليعوض التضخم
+        // الحجم يتغير عكسيًا مع التكبير ليظل ثابتًا على الشاشة
         let size = baseSize / zoom;
-        // حدود قصوى لتفادي الصغر الشديد أو الكبر المفرط
-        size = Math.max(2.5, Math.min(14, size));
+        // حدود قصوى لتجنب الصغر المفرط أو الكبر المزعج عند أقصى تكبير/تصغير
+        size = Math.max(3, Math.min(14, size)); // رفع الحد الأدنى قليلاً للوضوح
         if (window.innerWidth < 768) {
             size = size * 0.9;
         }
         return size;
     }
 
-    // دالة العتبة للمساحة: تتحكم في ظهور/اختفاء التسميات (تظهر الدول الكبيرة، تختفي الصغيرة عند التصغير)
+    // ========== الدالة المعدلة: عتبة المساحة لإظهار الأسماء ==========
     function getAreaThreshold() {
-        const zoom = currentTransform.k || 1;
-        let threshold = 0.003 / (zoom + 0.2);
+        const zoom = currentTransform.k;
+        // إذا كان التكبير أكبر من 3، نسمح بظهور كل الأسماء (نلغي الشرط)
+        if (zoom > 3) return 0;
+        // وإلا نطبق حدًا معقولاً جدًا لتظهر الدول المتوسطة والصغيرة مبكرًا
+        let threshold = 0.0015 / (zoom + 0.2); // خفضنا القيمة من 0.002 إلى 0.0015
         if (window.innerWidth < 768) {
             threshold = threshold * 1.2;
         }
@@ -1571,7 +1620,7 @@
         });
     }
 
-    // ========== رسم العواصم ==========
+    // ========== رسم العواصم (أحجام ثابتة) ==========
     function drawCapitals() {
         gCapitals.selectAll('*').remove();
         if (!capitalsVisible) return;
@@ -1608,7 +1657,7 @@
         });
     }
 
-    // ========== رسم تسميات الدول ==========
+    // ========== رسم تسميات الدول (بحيث تظل ثابتة بالنسبة للشاشة) ==========
     function drawCountryLabels(features) {
         if (countryLabelSelection) {
             countryLabelSelection.remove();
@@ -1666,8 +1715,9 @@
             const data = el.datum();
             if (!data) return;
             const area = data.area;
-            // تحديث الحجم والرؤية
+            // تحديث الحجم بناءً على التكبير الحالي
             el.attr('font-size', fontSize + 'px');
+            // تحديث الرؤية
             if (area < threshold) {
                 el.style('opacity', 0);
             } else {
@@ -1678,7 +1728,7 @@
         });
     }
 
-    // ========== دالة التكبير ==========
+    // ========== تحسين حدث التكبير ==========
     function setupZoom() {
         const {width, height} = getContainerDimensions();
         zoomBehavior = d3.zoom().scaleExtent([0.5, 6]).translateExtent([[-width*0.8, -height*0.8], [width*1.8, height*1.8]])
@@ -1696,7 +1746,7 @@
         svg.call(zoomBehavior); svg.on('dblclick.zoom', null);
     }
 
-    // ========== بقية الدوال الأساسية ==========
+    // ========== بقية الدوال ==========
     function renderCountries(features) {
         allCountryFeatures = features;
         ensureCountryData(features);
