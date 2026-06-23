@@ -341,6 +341,7 @@
 
         <div class="row">
             <span class="row-label" id="rowKeysLabel">🔑 المفاتيح:</span>
+            <button class="btn" id="labelsToggle">🏷️ الأسماء</button>
             <button class="btn" id="sectToggle">☯️ الطوائف</button>
             <button class="btn" id="corridorsToggle">⛵ الممرات</button>
             <button class="btn" id="densitySpotsToggle">🔴 بؤر</button>
@@ -366,6 +367,7 @@
     const langToggle = document.getElementById('langToggle');
     const modeButtons = document.querySelectorAll('.mode-btn');
     const religionButtons = document.querySelectorAll('.religion-btn');
+    const labelsToggle = document.getElementById('labelsToggle');
     const sectToggle = document.getElementById('sectToggle');
     const corridorsToggle = document.getElementById('corridorsToggle');
     const densitySpotsToggle = document.getElementById('densitySpotsToggle');
@@ -385,6 +387,7 @@
 
     let currentReligionFilter = 'all';
     let colorMode = 'religion';
+    let showLabels = false; // مفتاح أسماء الدول - مغلق افتراضياً
     let sectMode = false;
     let corridorsVisible = false;
     let densitySpotsMode = false;
@@ -708,6 +711,7 @@
         ar: {
             langLabel:'🌐 اللغة:',langButton:'العربية',modeLabel:'🎨 الوضع:',mode_religion:'🕌 دين',mode_terrain:'🏔️ تضاريس',mode_density:'👥 كثافة',mode_precipitation:'🌧️ أمطار',mode_temperature:'🌡️ حرارة',mode_normal:'🌍 طبيعي',
             filterLabel:'🎯 فلتر:',religion_all:'الكل',religion_muslim:'مسلم',religion_christian:'مسيحي',religion_hindu:'هندوسي',religion_buddhist:'بوذي',religion_jewish:'يهودي',religion_other:'آخر',
+            labelsToggle:'🏷️ الأسماء',
             sectToggle:'☯️ الطوائف',corridorsToggle:'⛵ الممرات',densitySpotsToggle:'🔴 بؤر',capitalsToggle:'🏙️ عواصم',timezonesToggle:'🕐 مناطق',copyLinkBtn:'📋 نسخ الرابط',resetBtn:'↺ إعادة',
             infoOverlay:'🦋 Waterman Butterfly | تكبير: {zoom}x | اسحب للتحريك | مرر للتكبير',
             terrainLegend:'🏔️ التضاريس',densityLegend:'👥 الكثافة',precipitationLegend:'🌧️ الهطول (مم/سنة)',temperatureLegend:'🌡️ الحرارة السنوية',
@@ -737,6 +741,7 @@
         en: {
             langLabel:'🌐 Language:',langButton:'English',modeLabel:'🎨 Mode:',mode_religion:'🕌 Religion',mode_terrain:'🏔️ Terrain',mode_density:'👥 Density',mode_precipitation:'🌧️ Precipitation',mode_temperature:'🌡️ Temperature',mode_normal:'🌍 Normal',
             filterLabel:'🎯 Filter:',religion_all:'All',religion_muslim:'Muslim',religion_christian:'Christian',religion_hindu:'Hindu',religion_buddhist:'Buddhist',religion_jewish:'Jewish',religion_other:'Other',
+            labelsToggle:'🏷️ Labels',
             sectToggle:'☯️ Sects',corridorsToggle:'⛵ Corridors',densitySpotsToggle:'🔴 Hotspots',capitalsToggle:'🏙️ Capitals',timezonesToggle:'🕐 Time Zones',copyLinkBtn:'📋 Copy Link',resetBtn:'↺ Reset',
             infoOverlay:'🦋 Waterman Butterfly | Zoom: {zoom}x | Drag to pan | Scroll to zoom',
             terrainLegend:'🏔️ Terrain',densityLegend:'👥 Density',precipitationLegend:'🌧️ Precipitation (mm/year)',temperatureLegend:'🌡️ Annual Temp',
@@ -1659,12 +1664,16 @@
         });
     }
 
-    // ========== رسم تسميات الدول ==========
+    // ========== رسم تسميات الدول (مع التحكم بالمفتاح) ==========
     function drawCountryLabels(features) {
+        // حذف التسميات القديمة
         if (countryLabelSelection) {
             countryLabelSelection.remove();
             countryLabelSelection = null;
         }
+        // إذا كان المفتاح مغلقاً، لا نرسم شيئاً
+        if (!showLabels) return;
+
         const threshold = getAreaThreshold();
         const fontSize = getLabelFontSize();
         const labelGroup = gCountries.append('g').attr('class', 'country-label-group');
@@ -1710,6 +1719,11 @@
 
     function updateLabels() {
         if (!countryLabelSelection) return;
+        // إذا كان المفتاح مغلقاً، نخفي التسميات
+        if (!showLabels) {
+            countryLabelSelection.style('opacity', 0);
+            return;
+        }
         const threshold = getAreaThreshold();
         const fontSize = getLabelFontSize();
         countryLabelSelection.each(function(d) {
@@ -1728,6 +1742,26 @@
             const newDisplay = lang === 'ar' ? getArabicName(data.name) : data.name;
             if (el.text() !== newDisplay) el.text(newDisplay);
         });
+    }
+
+    // ========== دالة تبديل أسماء الدول ==========
+    function toggleLabels() {
+        showLabels = !showLabels;
+        labelsToggle.classList.toggle('toggle-on', showLabels);
+        // إعادة رسم التسميات
+        if (countryLabelSelection) {
+            countryLabelSelection.remove();
+            countryLabelSelection = null;
+        }
+        if (showLabels) {
+            drawCountryLabels(allCountryFeatures);
+        } else {
+            // إزالة أي تسميات متبقية
+            gCountries.selectAll('.country-label-group').remove();
+            countryLabelSelection = null;
+        }
+        updateLegend();
+        updateHash();
     }
 
     function setupZoom() {
@@ -2085,6 +2119,9 @@
         document.getElementById('rowFilterLabel').textContent = t('rowFilterLabel');
         document.getElementById('rowKeysLabel').textContent = t('rowKeysLabel');
 
+        // تحديث نص زر الأسماء
+        labelsToggle.textContent = t('labelsToggle');
+
         document.querySelectorAll('[id$="Label"]').forEach(el => {
             if (el.id === 'langLabel') el.textContent = t('langLabel');
             else if (el.id === 'modeLabel') el.textContent = t('modeLabel');
@@ -2177,6 +2214,7 @@
     function updateHash() {
         const hash = new URLSearchParams();
         hash.set('lang', lang); hash.set('mode', colorMode); hash.set('filter', currentReligionFilter);
+        hash.set('labels', showLabels ? '1' : '0');
         hash.set('sect', sectMode ? '1' : '0'); hash.set('corridors', corridorsVisible ? '1' : '0');
         hash.set('spots', densitySpotsMode ? '1' : '0'); hash.set('capitals', capitalsVisible ? '1' : '0');
         hash.set('timezones', timezonesVisible ? '1' : '0');
@@ -2190,6 +2228,7 @@
             if (hash.has('lang')) setLanguage(hash.get('lang'));
             if (hash.has('mode')) setMode(hash.get('mode'));
             if (hash.has('filter')) { currentReligionFilter = hash.get('filter'); religionButtons.forEach(b => b.classList.remove('active')); const btn = document.querySelector(`.religion-btn[data-religion="${currentReligionFilter}"]`); if (btn) btn.classList.add('active'); }
+            if (hash.get('labels') === '1' && !showLabels) toggleLabels();
             if (hash.get('sect') === '1' && !sectMode) toggleSect();
             if (hash.get('corridors') === '1' && !corridorsVisible) toggleCorridors();
             if (hash.get('spots') === '1' && !densitySpotsMode) toggleDensitySpots();
@@ -2214,6 +2253,7 @@
             else if (code === 'KeyN') setMode('normal');
             else if (code === 'KeyA') toggleCapitals();
             else if (code === 'KeyZ') toggleTimezones();
+            else if (code === 'KeyL') toggleLabels();
             else if (code === 'Digit1') { currentReligionFilter = 'all'; updateReligionButtons(); updateAllStyles(); }
             else if (code === 'Digit2') { currentReligionFilter = 'muslim'; updateReligionButtons(); updateAllStyles(); }
             else if (code === 'Digit3') { currentReligionFilter = 'christian'; updateReligionButtons(); updateAllStyles(); }
@@ -2328,6 +2368,7 @@
 
     // ========== ربط الأحداث ==========
     modeButtons.forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+    labelsToggle.addEventListener('click', toggleLabels);
     sectToggle.addEventListener('click', toggleSect);
     corridorsToggle.addEventListener('click', toggleCorridors);
     densitySpotsToggle.addEventListener('click', toggleDensitySpots);
@@ -2377,6 +2418,7 @@
         religionButtons.forEach(b => b.classList.remove('active'));
         document.querySelector('.religion-btn[data-religion="all"]').classList.add('active');
         setMode('religion');
+        if (showLabels) toggleLabels();
         if (sectMode) toggleSect();
         if (corridorsVisible) toggleCorridors();
         if (densitySpotsMode) toggleDensitySpots();
