@@ -12,7 +12,7 @@
     </script>
 
     <style>
-        /* جميع الأنماط كما هي دون تغيير */
+        /* جميع الأنماط كما هي مع تحسينات إضافية للهواتف */
         :root {
             --bg: #1a1d23;
             --panel-bg: #21252b;
@@ -468,6 +468,7 @@
             text-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
             font-weight: 400;
         }
+        /* تحسينات الهواتف: تقليل حجم الأزرار والنقاط */
         @media (max-width: 768px) {
             .controls-bar {
                 width: 95vw;
@@ -483,41 +484,76 @@
                 gap: 6px;
             }
             .controls-bar .btn {
-                font-size: 0.75em;
-                padding: 8px 10px;
-                min-height: 36px;
-                border-radius: 20px;
+                font-size: 0.65em;
+                padding: 6px 8px;
+                min-height: 30px;
+                border-radius: 16px;
                 flex: 0 1 auto;
             }
             .controls-bar .row-label {
                 display: none;
             }
             .controls-bar .search-box input {
-                width: 80px;
-                font-size: 0.7em;
-                padding: 6px 10px;
+                width: 70px;
+                font-size: 0.65em;
+                padding: 4px 8px;
             }
             .menu-toggle {
-                width: 56px;
-                height: 56px;
-                font-size: 2em;
-                bottom: 20px;
-                right: 16px;
+                width: 48px;
+                height: 48px;
+                font-size: 1.6em;
+                bottom: 16px;
+                right: 12px;
             }
             .zoom-btn {
-                width: 32px;
-                height: 32px;
-                font-size: 1.2em;
+                width: 28px;
+                height: 28px;
+                font-size: 1em;
             }
             .zoom-controls {
-                bottom: 170px;
-                right: 16px;
+                bottom: 150px;
+                right: 12px;
+                gap: 4px;
             }
             .coordinates-display {
-                font-size: 0.5em;
-                padding: 3px 12px;
-                bottom: 6px;
+                font-size: 0.45em;
+                padding: 3px 10px;
+                bottom: 4px;
+                white-space: nowrap;
+                max-width: 90vw;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
+            .legend {
+                bottom: 70px;
+                left: 10px;
+                font-size: 0.55em;
+                padding: 8px 10px;
+                max-height: 40vh;
+            }
+            .legend-color {
+                width: 8px;
+                height: 8px;
+            }
+            .country-panel {
+                font-size: 0.6em;
+                max-width: 280px;
+                min-width: 160px;
+                padding: 8px 12px;
+                top: 20px;
+            }
+            .tooltip {
+                font-size: 0.6em;
+                max-width: 160px;
+                padding: 4px 8px;
+            }
+            .capital-label {
+                font-size: 5px !important;
+            }
+            .major-city-label {
+                font-size: 4px !important;
+            }
+            /* تقليل حجم النقاط للهواتف يتم عبر JS */
         }
         @media (min-width: 1024px) {
             .menu-toggle {
@@ -805,7 +841,7 @@
     <script>
         (function() {
             // =====================================================================
-            //  الكود الكامل مع التصحيح النهائي لعرض جميع بيانات الدول
+            //  الكود الكامل مع تحسين حجم النقاط للهواتف
             // =====================================================================
 
             const BASE = window.__BASE_PATH || './';
@@ -3258,7 +3294,6 @@
 
             // =====================================================================
             //  معلومات الدول (جميع العواصم) - أكثر من 200 دولة
-            //  تم إضافة "United States of America" و "United Kingdom" بشكل صحيح
             // =====================================================================
             const countryInfo = {
                 'Afghanistan': { capital_ar: 'كابول', capital_en: 'Kabul', capital_coords: [69.2, 34.5],
@@ -4268,7 +4303,6 @@
                 const clean = getCleanName(name);
                 if (continentByCountry[clean]) return continentByCountry[clean];
                 if (continentByCountry[name]) return continentByCountry[name];
-                // fallback
                 const feature = allCountryFeatures.find(f => f.properties?.name === name || getCleanName(f.properties
                     ?.name) === clean);
                 if (feature && feature.geometry) {
@@ -4468,7 +4502,7 @@
             };
 
             // =====================================================================
-            //  دوال الرسم الأساسية
+            //  دوال الرسم الأساسية مع تحسين حجم النقاط للهواتف
             // =====================================================================
             function getContainerDimensions() {
                 const r = mapContainer.getBoundingClientRect();
@@ -4535,10 +4569,13 @@
 
                 projection = setupProjection(width, height);
                 pathGen = d3.geoPath(projection);
+                // تعيين نصف قطر النقاط ليكون مناسباً للهواتف
+                const isMobile = window.innerWidth < 768;
+                pathGen.pointRadius(isMobile ? 1.5 : 3);
             }
 
             // =====================================================================
-            //  دوال الرسم التفصيلية
+            //  دوال الرسم التفصيلية مع تحسين حجم النقاط للهواتف
             // =====================================================================
             function drawGraticule() {
                 gGraticule.selectAll('*').remove();
@@ -4694,20 +4731,23 @@
             function drawCapitals() {
                 gCapitals.selectAll('*').remove();
                 if (!capitalsVisible) return;
+                const isMobile = window.innerWidth < 768;
+                const dotR = isMobile ? 2.5 : 3.5;
+                const haloR = isMobile ? 5 : 8;
                 Object.entries(countryInfo).forEach(([name, info]) => {
                     if (!info.capital_coords) return;
                     const [x, y] = projection(info.capital_coords);
                     if (isNaN(x) || isNaN(y)) return;
                     gCapitals.append('circle')
                         .attr('cx', x).attr('cy', y)
-                        .attr('r', 8)
+                        .attr('r', haloR)
                         .attr('class', 'capital-halo')
                         .attr('fill', '#ffd700')
                         .attr('opacity', 0.2)
                         .attr('vector-effect', 'non-scaling-stroke');
                     gCapitals.append('circle')
                         .attr('cx', x).attr('cy', y)
-                        .attr('r', 3.5)
+                        .attr('r', dotR)
                         .attr('class', 'capital-dot')
                         .attr('fill', '#ffd700')
                         .attr('stroke', '#000')
@@ -4715,10 +4755,10 @@
                         .attr('vector-effect', 'non-scaling-stroke');
                     const label = lang === 'ar' ? info.capital_ar : info.capital_en;
                     gCapitals.append('text')
-                        .attr('x', x + 8).attr('y', y - 2)
+                        .attr('x', x + (isMobile ? 5 : 8)).attr('y', y - 2)
                         .attr('class', 'capital-label')
                         .text(label)
-                        .attr('font-size', '6px')
+                        .attr('font-size', isMobile ? '4px' : '6px')
                         .attr('fill', '#fff')
                         .attr('text-anchor', 'start')
                         .attr('dominant-baseline', 'central')
@@ -4729,10 +4769,11 @@
             function drawMajorCities() {
                 gMajorCities.selectAll('*').remove();
                 if (!majorCitiesVisible) return;
+                const isMobile = window.innerWidth < 768;
                 majorCitiesData.forEach(city => {
                     const [x, y] = projection(city.coords);
                     if (isNaN(x) || isNaN(y)) return;
-                    const r = Math.max(2, Math.min(6, city.pop / 5));
+                    const r = Math.max(isMobile ? 1.5 : 2, Math.min(isMobile ? 4 : 6, city.pop / 5));
                     gMajorCities.append('circle')
                         .attr('cx', x).attr('cy', y)
                         .attr('r', r)
@@ -4744,10 +4785,10 @@
                         .attr('opacity', 0.85);
                     const label = lang === 'ar' ? city.name : city.name;
                     gMajorCities.append('text')
-                        .attr('x', x + r + 3).attr('y', y - 2)
+                        .attr('x', x + r + 2).attr('y', y - 2)
                         .attr('class', 'major-city-label')
                         .text(label)
-                        .attr('font-size', '6px')
+                        .attr('font-size', isMobile ? '4px' : '6px')
                         .attr('fill', '#fff')
                         .attr('text-anchor', 'start')
                         .attr('dominant-baseline', 'central')
@@ -4951,19 +4992,20 @@
             function drawDensitySpots() {
                 gTemperature.selectAll('*').remove();
                 if (colorMode !== 'density' || !densitySpotsMode) return;
+                const isMobile = window.innerWidth < 768;
                 densitySpots.forEach(s => {
                     const [x, y] = projection(s.coords);
                     if (isNaN(x) || isNaN(y)) return;
-                    const baseR = Math.max(1.5, Math.sqrt(s.density) / 30);
+                    const baseR = Math.max(isMobile ? 1 : 1.5, Math.sqrt(s.density) / (isMobile ? 40 : 30));
                     const color = s.density > 10000 ? '#ff5252' : s.density > 4000 ? '#ff9800' : '#ffeb3b';
                     gTemperature.append('circle')
                         .attr('cx', x).attr('cy', y)
-                        .attr('r', baseR * 3.5)
+                        .attr('r', baseR * (isMobile ? 2.5 : 3.5))
                         .attr('fill', color)
                         .attr('opacity', 0.15);
                     gTemperature.append('circle')
                         .attr('cx', x).attr('cy', y)
-                        .attr('r', baseR * 2.2)
+                        .attr('r', baseR * (isMobile ? 1.5 : 2.2))
                         .attr('fill', color)
                         .attr('opacity', 0.4);
                     gTemperature.append('circle')
@@ -4977,7 +5019,7 @@
                         .attr('x', x + baseR + 2).attr('y', y - 2)
                         .text(s.name)
                         .attr('fill', '#fff')
-                        .attr('font-size', 7)
+                        .attr('font-size', isMobile ? 5 : 7)
                         .attr('font-weight', 'bold')
                         .attr('style', 'text-shadow: 0 0 4px rgba(0,0,0,0.8)');
                 });
@@ -6220,6 +6262,8 @@
                     svgEl.setAttribute('height', height);
                     projection = setupProjection(width, height);
                     pathGen = d3.geoPath(projection);
+                    const isMobile = window.innerWidth < 768;
+                    pathGen.pointRadius(isMobile ? 1.5 : 3);
                     gOcean.select('rect').attr('width', width + 1000).attr('height', height + 1000);
                     drawGraticule();
                     if (allCountryFeatures.length) {
